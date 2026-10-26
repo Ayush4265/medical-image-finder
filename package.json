@@ -1,0 +1,21 @@
+{
+  "name": "medical-image-finder",
+  "version": "1.0.0",
+  "description": "Search medical reference images from note selections, preview in sidebar, copy to clipboard, and insert offline into notes.",
+  "main": "main.js",
+  "scripts": {
+    "test": "echo \"No test specified\" && exit 0"
+  },
+  "keywords": [
+    "obsidian",
+    "obsidian-plugin",
+    "medical",
+    "images",
+    "diagrams",
+    "anatomy",
+    "radiology",
+    "histology"
+  ],
+  "author": "Atharva Savnerkar",
+  "license": "MIT"
+}
