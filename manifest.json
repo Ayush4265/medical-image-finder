@@ -1,0 +1,10 @@
+{
+  "id": "medical-image-finder",
+  "name": "Medical Image Finder",
+  "version": "1.0.0",
+  "minAppVersion": "1.5.0",
+  "description": "Search medical reference images from note selections, preview in sidebar, copy to clipboard, and insert offline into notes.",
+  "author": "Atharva Savnerkar",
+  "authorUrl": "https://github.com/Ayush4265",
+  "isDesktopOnly": true
+}
