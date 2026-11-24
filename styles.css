@@ -59,11 +59,77 @@
 
 .mif-query-wrapper {
   display: flex;
-  gap: 6px;
+  flex-wrap: wrap;
+  gap: 4px;
+  align-items: center;
+}
+
+.mif-btn-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 6px 8px;
+  font-size: 13px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-s);
+  background: var(--background-secondary);
+  color: var(--text-normal);
+  cursor: pointer;
+  transition: all 0.15s ease;
+  flex-shrink: 0;
+}
+
+.mif-btn-icon:hover {
+  background: var(--background-modifier-hover);
+  border-color: var(--interactive-accent);
+  color: var(--interactive-accent);
+}
+
+.mif-tab-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  background: var(--background-secondary);
+  padding: 3px;
+  border-radius: var(--radius-m);
+  border: 1px solid var(--background-modifier-border);
+}
+
+.mif-tab {
+  flex: 1 1 100px;
+  min-width: 0;
+  white-space: normal;
+  height: auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  padding: 5px 8px;
+  font-size: 11px;
+  font-weight: 500;
+  border-radius: var(--radius-s);
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.mif-tab:hover {
+  color: var(--text-normal);
+  background: var(--background-modifier-hover);
+}
+
+.mif-tab.is-active {
+  background: var(--background-primary);
+  color: var(--interactive-accent);
+  font-weight: 600;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12);
 }
 
 .mif-query-input {
-  flex: 1;
+  flex: 1 1 140px;
+  min-width: 0;
   padding: 6px 10px;
   font-size: 13px;
   border: 1px solid var(--background-modifier-border);
@@ -89,6 +155,7 @@
 
 .mif-provider-select {
   flex: 1;
+  min-width: 0;
   max-width: 220px;
   padding: 4px 8px;
   border-radius: var(--radius-s);
@@ -383,4 +450,566 @@
   margin: 0;
   font-size: 12px;
   line-height: 1.5;
+}
+
+/* AI Note Visual Scanner Styles */
+.mif-scan-container {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.mif-scan-hero {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  background: var(--background-secondary);
+  border-radius: var(--radius-m);
+  border: 1px solid var(--background-modifier-border);
+}
+
+.mif-scan-hero-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-normal);
+  margin: 0;
+}
+
+.mif-scan-hero-desc {
+  font-size: 11px;
+  color: var(--text-muted);
+  line-height: 1.4;
+  margin: 0;
+}
+
+.mif-scan-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 8px 12px;
+  font-size: 12px;
+  font-weight: 600;
+  background: var(--interactive-accent);
+  color: var(--text-on-accent);
+  border: none;
+  border-radius: var(--radius-s);
+  cursor: pointer;
+  transition: background-color 0.15s ease;
+}
+
+.mif-scan-btn:hover {
+  background: var(--interactive-accent-hover);
+}
+
+.mif-scan-card {
+  display: flex;
+  flex-direction: column;
+  background: var(--background-secondary);
+  border: 1px solid var(--background-modifier-border);
+  border-left: 3px solid var(--interactive-accent);
+  border-radius: var(--radius-m);
+  padding: 10px;
+  gap: 8px;
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+
+.mif-scan-card:hover {
+  box-shadow: 0 3px 8px rgba(0, 0, 0, 0.1);
+  border-color: var(--interactive-accent);
+}
+
+.mif-scan-header-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+
+.mif-scan-heading {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-accent);
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mif-scan-concept {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-normal);
+  line-height: 1.3;
+  margin: 0;
+}
+
+.mif-scan-rationale {
+  font-size: 11px;
+  color: var(--text-muted);
+  line-height: 1.4;
+  background: var(--background-primary);
+  padding: 6px 8px;
+  border-radius: var(--radius-s);
+  border-left: 2px solid var(--text-accent);
+}
+
+.mif-scan-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 2px;
+}
+
+.mif-inline-results {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(85px, 1fr));
+  gap: 6px;
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px dashed var(--background-modifier-border);
+}
+
+.mif-inline-thumb-card {
+  display: flex;
+  flex-direction: column;
+  background: var(--background-primary);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-s);
+  overflow: hidden;
+  position: relative;
+  cursor: pointer;
+}
+
+.mif-inline-thumb-card:hover {
+  border-color: var(--interactive-accent);
+}
+
+.mif-inline-thumb-img {
+  width: 100%;
+  height: 60px;
+  object-fit: cover;
+}
+
+.mif-inline-thumb-actions {
+  display: flex;
+  justify-content: space-around;
+  padding: 2px;
+  background: var(--background-secondary);
+  font-size: 10px;
+}
+
+
+/* Alt+G Clipboard Bridge & Import Modal Styles */
+.mif-step2-box {
+  background: var(--background-primary-alt);
+  border-left: 3px solid var(--interactive-accent);
+  padding: 10px;
+  border-radius: var(--radius-s);
+  margin-top: 6px;
+}
+
+.mif-step2-box kbd {
+  background-color: var(--background-secondary);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 3px;
+  box-shadow: 0 1px 1px rgba(0, 0, 0, 0.15);
+  font-family: var(--font-monospace);
+  font-size: 11px;
+  padding: 1px 4px;
+  color: var(--text-normal);
+}
+
+.mif-query-row {
+  font-size: 11px;
+  color: var(--text-muted);
+  line-height: 1.4;
+  margin-top: 2px;
+}
+
+
+/* Auto-scroll Highlight Pulse & Inserted Badges */
+@keyframes mif-card-pulse-anim {
+  0% { box-shadow: 0 0 0 0 var(--interactive-accent); border-color: var(--interactive-accent); }
+  50% { box-shadow: 0 0 0 4px rgba(var(--interactive-accent-rgb, 120, 100, 255), 0.4); border-color: var(--interactive-accent); }
+  100% { box-shadow: none; }
+}
+
+.mif-highlight-pulse {
+  animation: mif-card-pulse-anim 1.8s ease-out;
+  border-color: var(--interactive-accent) !important;
+}
+
+.mif-scan-card.is-inserted {
+  border-left: 3px solid #3fb950 !important;
+}
+
+.mif-badge-inserted {
+  background: rgba(46, 160, 67, 0.2);
+  color: #3fb950 !important;
+  border: 1px solid rgba(46, 160, 67, 0.4);
+  font-weight: 600;
+}
+
+.mif-scanner-return-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  margin-bottom: 12px;
+  background: var(--background-secondary-alt);
+  border: 1px solid var(--interactive-accent);
+  border-radius: var(--radius-s);
+  font-size: 12px;
+}
+
+.mif-scanner-return-banner .mif-return-label {
+  color: var(--text-normal);
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* --- In-situ Target Images Selector --- */
+.mif-scan-count-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin: 8px 0 10px 0;
+  padding: 6px 10px;
+  background: var(--background-secondary-alt);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-s);
+}
+
+.mif-scan-count-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-normal);
+}
+
+.mif-scan-count-select {
+  font-size: 12px;
+  font-weight: 600;
+  padding: 3px 8px;
+  background: var(--background-primary);
+  color: var(--text-normal);
+  border: 1px solid var(--interactive-accent);
+  border-radius: var(--radius-s);
+  cursor: pointer;
+}
+
+/* --- Batch Action Bar in Scanner View --- */
+.mif-batch-bar {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+  margin-bottom: 12px;
+}
+
+.mif-batch-btn {
+  flex: 1.2;
+  font-weight: 600;
+  font-size: 12px;
+}
+
+.mif-batch-autopilot-btn {
+  flex: 1;
+  font-weight: 600;
+  font-size: 12px;
+  background: var(--background-modifier-accent-subtle, rgba(235, 153, 39, 0.15));
+  border: 1px solid var(--interactive-accent);
+  color: var(--text-normal);
+}
+
+.mif-batch-autopilot-btn:hover {
+  background: var(--interactive-accent);
+  color: var(--text-on-accent, #ffffff);
+}
+
+/* --- Fast Batch Review Modal Window & Responsive Layout --- */
+.modal.mif-batch-modal-window,
+.modal:has(.mif-batch-modal) {
+  width: min(940px, 94vw) !important;
+  max-width: 940px !important;
+  height: 88vh !important;
+  max-height: 88vh !important;
+  display: flex !important;
+  flex-direction: column !important;
+  padding: 18px 22px 14px 22px !important;
+  box-sizing: border-box !important;
+}
+
+.modal-content.mif-batch-modal {
+  display: flex !important;
+  flex-direction: column !important;
+  flex: 1 1 auto !important;
+  min-height: 0 !important;
+  padding: 0 !important;
+  overflow: hidden !important;
+}
+
+.mif-batch-top-bar {
+  flex: 0 0 auto;
+  margin-bottom: 8px;
+}
+
+.mif-batch-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 10px;
+  background: var(--background-secondary-alt);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-s);
+  margin-top: 6px;
+  flex-wrap: wrap;
+}
+
+.mif-batch-toolbar-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-normal);
+}
+
+.mif-batch-provider-select {
+  font-size: 12px;
+  padding: 3px 8px;
+  background: var(--background-primary);
+  color: var(--text-normal);
+  border: 1px solid var(--interactive-accent);
+  border-radius: var(--radius-s);
+  cursor: pointer;
+}
+
+.mif-btn-refresh-all {
+  font-size: 11px;
+  padding: 3px 8px;
+}
+
+.mif-batch-progress-box {
+  flex: 0 0 auto;
+  margin: 6px 0 10px 0;
+  padding: 8px 12px;
+  background: var(--background-secondary-alt);
+  border-radius: var(--radius-s);
+}
+
+.mif-batch-progress-label {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-normal);
+  margin-bottom: 6px;
+}
+
+.mif-batch-progress-bar {
+  width: 100%;
+  height: 8px;
+  border-radius: 4px;
+}
+
+.mif-batch-list-container {
+  flex: 1 1 auto !important;
+  min-height: 0 !important;
+  overflow-y: auto !important;
+  overflow-x: hidden !important;
+  padding-right: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.mif-batch-card {
+  background: var(--background-primary);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-m);
+  padding: 10px 14px;
+}
+
+.mif-batch-card-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.mif-batch-card-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-normal);
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mif-batch-loading {
+  font-size: 12px;
+  color: var(--text-muted);
+  font-style: italic;
+  padding: 10px 0;
+}
+
+.mif-batch-error-box {
+  background: rgba(235, 87, 87, 0.1);
+  border: 1px solid rgba(235, 87, 87, 0.3);
+  border-radius: var(--radius-s);
+  padding: 8px 10px;
+  margin-top: 6px;
+}
+
+.mif-batch-no-results {
+  font-size: 12px;
+  color: var(--text-error, #f85149);
+  margin-bottom: 8px;
+}
+
+.mif-batch-options-row {
+  display: flex;
+  gap: 10px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 4px 2px 8px 2px;
+  scrollbar-width: thin;
+  scroll-behavior: smooth;
+  -webkit-overflow-scrolling: touch;
+}
+
+.mif-batch-options-row::-webkit-scrollbar {
+  height: 6px;
+}
+
+.mif-batch-options-row::-webkit-scrollbar-track {
+  background: var(--background-secondary, rgba(0, 0, 0, 0.15));
+  border-radius: 3px;
+}
+
+.mif-batch-options-row::-webkit-scrollbar-thumb {
+  background: var(--background-modifier-border, #555);
+  border-radius: 3px;
+}
+
+.mif-batch-options-row::-webkit-scrollbar-thumb:hover {
+  background: var(--interactive-accent, #388bfd);
+}
+
+.mif-batch-thumb-option {
+  position: relative;
+  flex: 0 0 135px;
+  width: 135px;
+  height: 95px;
+  border: 2px solid var(--background-modifier-border);
+  border-radius: var(--radius-s);
+  cursor: pointer;
+  overflow: hidden;
+  background: var(--background-secondary);
+  transition: border-color 0.15s ease, transform 0.15s ease, box-shadow 0.15s ease;
+  user-select: none;
+}
+
+.mif-batch-thumb-option:hover {
+  transform: translateY(-2px);
+  border-color: var(--interactive-accent-hover, #70a0ff);
+}
+
+.mif-batch-thumb-option.is-selected {
+  border-color: var(--interactive-accent, #388bfd) !important;
+  box-shadow: 0 0 0 2px rgba(56, 139, 253, 0.4);
+}
+
+.mif-batch-thumb-img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.mif-batch-choice-label {
+  position: absolute;
+  top: 4px;
+  left: 4px;
+  background: rgba(0, 0, 0, 0.7);
+  color: #ffffff;
+  font-size: 10px;
+  font-weight: 700;
+  padding: 2px 5px;
+  border-radius: 3px;
+}
+
+.mif-batch-thumb-option.is-selected .mif-batch-choice-label {
+  background: var(--interactive-accent, #388bfd);
+}
+
+.mif-batch-card-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+  flex-wrap: wrap;
+}
+
+.mif-batch-card-query-input {
+  flex: 1;
+  min-width: 180px;
+  font-size: 11px;
+  padding: 4px 8px;
+  background: var(--background-secondary);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-s);
+  color: var(--text-normal);
+}
+
+.mif-batch-card-retry {
+  font-size: 11px;
+  padding: 3px 9px;
+  font-weight: 600;
+}
+
+.mif-batch-card-alt {
+  font-size: 11px;
+  padding: 3px 8px;
+}
+
+/* Sticky, non-clipped footer */
+.mif-batch-footer {
+  flex: 0 0 auto !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: space-between !important;
+  flex-wrap: wrap !important;
+  gap: 12px !important;
+  margin-top: 12px !important;
+  padding-top: 10px !important;
+  border-top: 1px solid var(--background-modifier-border) !important;
+  background: var(--background-primary) !important;
+}
+
+.mif-batch-footer-left {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.mif-batch-counter {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-muted);
+}
+
+.mif-batch-footer-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.mif-btn-clear-mem {
+  font-size: 11px;
+  padding: 2px 6px;
+  color: var(--text-muted);
 }
