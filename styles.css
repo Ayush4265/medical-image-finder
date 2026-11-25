@@ -638,18 +638,18 @@
   100% { box-shadow: none; }
 }
 
-.mif-highlight-pulse {
+.mif-scan-container .mif-scan-card.mif-highlight-pulse {
   animation: mif-card-pulse-anim 1.8s ease-out;
-  border-color: var(--interactive-accent) !important;
+  border-color: var(--interactive-accent);
 }
 
-.mif-scan-card.is-inserted {
-  border-left: 3px solid #3fb950 !important;
+.mif-scan-container .mif-scan-card.is-inserted {
+  border-left: 3px solid #3fb950;
 }
 
-.mif-badge-inserted {
+.mif-badge.mif-badge-inserted {
   background: rgba(46, 160, 67, 0.2);
-  color: #3fb950 !important;
+  color: #3fb950;
   border: 1px solid rgba(46, 160, 67, 0.4);
   font-weight: 600;
 }
@@ -672,6 +672,23 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.mif-banner-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.mif-batch-insert-warn {
+  font-size: 11px;
+  color: var(--text-error, #f85149);
+  background: rgba(235, 87, 87, 0.1);
+  border: 1px solid rgba(235, 87, 87, 0.3);
+  border-radius: var(--radius-s);
+  padding: 5px 8px;
+  margin-bottom: 6px;
 }
 
 /* --- In-situ Target Images Selector --- */
@@ -732,25 +749,24 @@
 }
 
 /* --- Fast Batch Review Modal Window & Responsive Layout --- */
-.modal.mif-batch-modal-window,
-.modal:has(.mif-batch-modal) {
-  width: min(940px, 94vw) !important;
-  max-width: 940px !important;
-  height: 88vh !important;
-  max-height: 88vh !important;
-  display: flex !important;
-  flex-direction: column !important;
-  padding: 18px 22px 14px 22px !important;
-  box-sizing: border-box !important;
+body .modal-container .modal.mif-batch-modal-window {
+  width: min(940px, 94vw);
+  max-width: 940px;
+  height: 88vh;
+  max-height: 88vh;
+  display: flex;
+  flex-direction: column;
+  padding: 18px 22px 14px 22px;
+  box-sizing: border-box;
 }
 
-.modal-content.mif-batch-modal {
-  display: flex !important;
-  flex-direction: column !important;
-  flex: 1 1 auto !important;
-  min-height: 0 !important;
-  padding: 0 !important;
-  overflow: hidden !important;
+body .modal.mif-batch-modal-window .modal-content.mif-batch-modal {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+  padding: 0;
+  overflow: hidden;
 }
 
 .mif-batch-top-bar {
@@ -812,11 +828,11 @@
   border-radius: 4px;
 }
 
-.mif-batch-list-container {
-  flex: 1 1 auto !important;
-  min-height: 0 !important;
-  overflow-y: auto !important;
-  overflow-x: hidden !important;
+.modal-content.mif-batch-modal .mif-batch-list-container {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
   padding-right: 8px;
   display: flex;
   flex-direction: column;
@@ -874,7 +890,6 @@
   overflow-x: auto;
   overflow-y: hidden;
   padding: 4px 2px 8px 2px;
-  scrollbar-width: thin;
   scroll-behavior: smooth;
   -webkit-overflow-scrolling: touch;
 }
@@ -916,8 +931,8 @@
   border-color: var(--interactive-accent-hover, #70a0ff);
 }
 
-.mif-batch-thumb-option.is-selected {
-  border-color: var(--interactive-accent, #388bfd) !important;
+.mif-batch-options-row .mif-batch-thumb-option.is-selected {
+  border-color: var(--interactive-accent, #388bfd);
   box-shadow: 0 0 0 2px rgba(56, 139, 253, 0.4);
 }
 
@@ -975,17 +990,17 @@
 }
 
 /* Sticky, non-clipped footer */
-.mif-batch-footer {
-  flex: 0 0 auto !important;
-  display: flex !important;
-  align-items: center !important;
-  justify-content: space-between !important;
-  flex-wrap: wrap !important;
-  gap: 12px !important;
-  margin-top: 12px !important;
-  padding-top: 10px !important;
-  border-top: 1px solid var(--background-modifier-border) !important;
-  background: var(--background-primary) !important;
+.modal-content.mif-batch-modal .mif-batch-footer {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid var(--background-modifier-border);
+  background: var(--background-primary);
 }
 
 .mif-batch-footer-left {
@@ -1006,6 +1021,18 @@
   align-items: center;
   gap: 8px;
   flex-wrap: wrap;
+}
+
+.mif-batch-thumb-option .mif-thumb-overlay {
+  top: auto;
+  bottom: 4px;
+  right: 4px;
+  font-size: 9px;
+  padding: 1px 4px;
+}
+
+.mif-img-broken {
+  opacity: 0.25;
 }
 
 .mif-btn-clear-mem {
