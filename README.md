@@ -2,9 +2,9 @@
 
 A dedicated Windows Obsidian plugin that enables medical students and clinicians to search, preview, copy, save, and AI-audit medical reference images directly from their notes.
 
-## Key Features (v2.0)
+## Key Features (v2.5)
 
-- **⚡ Fast Batch Review & Multi-Select**: Review all AI visual opportunities at once in an interactive modal. Features smooth horizontal mouse-wheel scrolling across all returned images and allows toggling 1 or more images per query for automated bottom-to-top batch insertion with zero line drift.
+- **⚡ Fast Batch Review & Multi-Select**: Review all AI visual opportunities at once in an interactive modal. Features smooth horizontal mouse-wheel scrolling across all returned images (without locking vertical modal scroll) and allows toggling 1 or more images per query for automated bottom-to-top batch insertion with zero line drift.
 - **📐 Smart List Continuation & Clean Embeds**: Images inserted under list items or sub-bullets automatically inherit the exact indentation of the bullet point, eliminating syntax corruption and preventing subsequent bullet points from turning into indented code blocks. Intrusive caption text is omitted for clean reading.
 - **🌐 Double-Click to Open Source**: Double-clicking any image in the search grid, fast batch review modal, inline cards, or full-screen preview opens the original source article or website directly in your browser.
 - **🔍 Bright Data Google Images Integration**: Added support for Bright Data SERP API, giving you 5,000 free Google Images queries per month with high-resolution original images and instant preview thumbnails.
