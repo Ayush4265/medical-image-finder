@@ -633,10 +633,17 @@ test('BatchImageReviewModal retains all candidate images and supports multi-imag
   modal.close();
 });
 
-test('BatchImageReviewModal double-clicking thumbnail triggers openExternalUrl for source', async () => {
+test('BatchImageReviewModal double-clicking thumbnail opens ImagePreviewModal without toggling selection or browser', async () => {
   const h = createHarness();
   const plugin = new h.PluginClass({ vault: {}, workspace: {} }, {});
-  plugin.settings = { defaultProvider: 'duckduckgo' };
+  plugin.settings = { defaultProvider: 'duckduckgo', batchPreviewSize: 'lg' };
+
+  let openedPreview = null;
+  const origPreviewOpen = h._test.ImagePreviewModal.prototype.open;
+  h._test.ImagePreviewModal.prototype.open = function () {
+    openedPreview = this;
+    return origPreviewOpen.call(this);
+  };
 
   const view = {
     scanResults: {
@@ -655,8 +662,8 @@ test('BatchImageReviewModal double-clicking thumbnail triggers openExternalUrl f
       { title: 'Calot 1', imageUrl: 'https://example.com/calot1.png', sourceUrl: 'https://teachmeanatomy.info/calot' }
     ];
     rItem.loading = false;
-    rItem.included = true;
-    rItem.selectedIndices = [0];
+    rItem.included = false;
+    rItem.selectedIndices = [];
     rItem.selectedIdx = 0;
   };
 
@@ -666,10 +673,24 @@ test('BatchImageReviewModal double-clicking thumbnail triggers openExternalUrl f
   const thumb = card.querySelector('.mif-batch-thumb-option');
   assert.ok(thumb != null);
 
-  // Simulate double-click
+  // Simulate Chromium's click(1) -> click(2) -> dblclick sequence on initially unselected item
+  thumb.onclick({ stopPropagation: () => {}, detail: 1 });
+  thumb.onclick({ stopPropagation: () => {}, detail: 2 });
   thumb.ondblclick({ preventDefault: () => {}, stopPropagation: () => {} });
 
-  assert.ok(h.openedUrls.includes('https://teachmeanatomy.info/calot'), 'Double click must invoke electron shell to open source website');
+  assert.equal(h.openedUrls.length, 0, 'Double-click must NOT launch external browser');
+  assert.ok(openedPreview != null, 'Double-click must open large ImagePreviewModal');
+  assert.equal(openedPreview.item.imageUrl, 'https://example.com/calot1.png');
+  assert.deepEqual(Array.from(modal.reviewItems[0].selectedIndices), [], 'Double-click must restore pre-click state (no accidental toggle)');
+  assert.equal(modal.reviewItems[0].included, false);
+
+  // Explicit Open source page button inside ImagePreviewModal still opens browser
+  const openSourceBtn = openedPreview.contentEl.querySelectorAll('.mif-btn').find(b => b.text.includes('Open source page'));
+  assert.ok(openSourceBtn != null);
+  openSourceBtn.onclick();
+  assert.ok(h.openedUrls.includes('https://teachmeanatomy.info/calot'));
+
+  openedPreview.close();
   modal.close();
 });
 
@@ -761,25 +782,50 @@ test('batchInsertImages sequentially places multiple images under the same topic
   assert.ok(idx1 < idx2, 'Choice #1 must appear before Choice #2 in note');
 });
 
-test('ImagePreviewModal double click on preview image opens source in browser', () => {
+test('ImagePreviewModal double click toggles 2x zoom, supports navigation, and opens source via button only', () => {
   const h = createHarness();
   const plugin = new h.PluginClass({ vault: {}, workspace: {} }, {});
-  const item = {
-    title: 'Preview Image',
-    imageUrl: 'https://example.com/preview.png',
-    sourceUrl: 'https://radiopaedia.org/cases/test'
-  };
+  const items = [
+    {
+      title: 'Preview Image 1',
+      imageUrl: 'https://example.com/preview1.png',
+      sourceUrl: 'https://radiopaedia.org/cases/test-1',
+      width: 180,
+      height: 180
+    },
+    {
+      title: 'Preview Image 2',
+      imageUrl: 'https://example.com/preview2.png',
+      sourceUrl: 'https://radiopaedia.org/cases/test-2',
+      width: 900,
+      height: 700
+    }
+  ];
 
-  const modal = new h._test.ImagePreviewModal({}, plugin, item, null);
+  const modal = new h._test.ImagePreviewModal({}, plugin, items[0], null, { items, currentIndex: 0 });
   modal.open();
 
   const img = modal.contentEl.querySelector('.mif-modal-img');
+  const lowResBadge = modal.contentEl.querySelector('.mif-badge-lowres');
   assert.ok(img != null);
+  assert.ok(lowResBadge != null, 'Images below 250px must show low-res warning badge');
 
-  // Trigger double-click
+  // Double-click toggles 2x zoom instead of opening external browser
   img.ondblclick({ preventDefault: () => {}, stopPropagation: () => {} });
+  assert.equal(modal.isZoomed, true);
+  assert.ok(img.hasClass('is-zoomed'));
+  assert.equal(h.openedUrls.length, 0, 'Double-clicking preview must stay in Obsidian');
 
-  assert.ok(h.openedUrls.includes('https://radiopaedia.org/cases/test'), 'Double-clicking modal image must open source URL');
+  // Navigate to next image resets zoom and updates active item
+  modal.navigateBy(1);
+  assert.equal(modal.currentIndex, 1);
+  assert.equal(modal.isZoomed, false);
+  assert.equal(modal.item.imageUrl, 'https://example.com/preview2.png');
+
+  const openSourceBtn = modal.contentEl.querySelectorAll('.mif-btn').find(b => b.text.includes('Open source page'));
+  assert.ok(openSourceBtn != null);
+  openSourceBtn.onclick();
+  assert.ok(h.openedUrls.includes('https://radiopaedia.org/cases/test-2'));
   modal.close();
 });
 
@@ -870,4 +916,56 @@ test('BrightDataProvider successfully processes live Google Images response enve
   assert.equal(results[0].imageUrl, 'https://www.researchgate.net/publication/fig1.tif');
   assert.equal(results[0].thumbnailUrl, 'data:image/jpeg;base64,/9j/4AAQSkZJRg...');
   assert.equal(results[0].domain, 'researchgate.net');
+});
+
+test('Search cards and Inline Quick Find double-click open large ImagePreviewModal instead of browser', () => {
+  const h = createHarness();
+  const plugin = new h.PluginClass({ vault: {}, workspace: { getLeavesOfType: () => [], getActiveViewOfType: () => null } }, {});
+  plugin.settings = { defaultProvider: 'duckduckgo', defaultFilterMode: 'all', geminiMaxSuggestions: 25 };
+  plugin.getTargetView = () => null;
+  plugin.getActiveProvider = () => ({ name: 'DuckDuckGo' });
+  plugin.bindAction = () => {};
+
+  const opened = [];
+  const origOpen = h._test.ImagePreviewModal.prototype.open;
+  h._test.ImagePreviewModal.prototype.open = function () {
+    opened.push(this);
+    return origOpen.call(this);
+  };
+
+  const view = new h._test.MedicalImageFinderView({ leaf: {} }, plugin);
+  view.currentTab = 'search';
+  view.results = [
+    { title: 'Item 1', imageUrl: 'https://example.com/1.png', sourceUrl: 'https://web.example/1', domain: 'web.example' }
+  ];
+  view.render();
+
+  const thumb = view.contentEl.querySelector('.mif-thumb-container');
+  thumb.ondblclick({ preventDefault: () => {}, stopPropagation: () => {} });
+  assert.equal(h.openedUrls.length, 0, 'Search card double-click must not open browser');
+  assert.equal(opened.length, 1, 'Search card double-click must open ImagePreviewModal');
+  assert.equal(opened[0].previewContext.items.length, 1);
+  opened[0].close();
+
+  // Switch to scan tab with inline results
+  view.currentTab = 'scan';
+  view.scanResults = {
+    summary: 'Audit summary',
+    suggestions: [{ heading: 'Calot', line: 5, visualConcept: 'Calot', visualType: 'diagram', recommendedQuery: 'calot' }]
+  };
+  view.inlineQuickResults.set(0, [
+    { title: 'Inline 1', imageUrl: 'https://example.com/inline1.png', sourceUrl: 'https://inline.web/1', domain: 'inline.web' }
+  ]);
+  view.render();
+
+  const inlineTile = view.contentEl.querySelector('.mif-inline-thumb-card');
+  inlineTile.ondblclick({ preventDefault: () => {}, stopPropagation: () => {} });
+  assert.equal(h.openedUrls.length, 0, 'Inline Quick Find double-click must not open browser');
+  assert.equal(opened.length, 2, 'Inline Quick Find double-click must open ImagePreviewModal');
+  opened[1].close();
+
+  const webBtn = view.contentEl.querySelector('.mif-inline-web-btn');
+  assert.ok(webBtn != null, 'Inline Quick Find tile must provide explicit 🌐 button');
+  webBtn.onclick({ stopPropagation: () => {} });
+  assert.ok(h.openedUrls.includes('https://inline.web/1'));
 });

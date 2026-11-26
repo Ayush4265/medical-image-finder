@@ -137,7 +137,7 @@ function createHarness(customRequest = null) {
   const code = fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8');
   vm.createContext(sandbox);
   vm.runInContext(
-    code + '\nmodule.exports._test = { GeminiScannerService, WikimediaProvider, BrightDataProvider, BatchImageReviewModal, MedicalImageFinderView, normalizeSettings };',
+    code + '\nmodule.exports._test = { GeminiScannerService, WikimediaProvider, BrightDataProvider, BatchImageReviewModal, MedicalImageFinderView, ImagePreviewModal, normalizeSettings, extractNoteSections, normalizeScanScope, prepareScopedLines };',
     sandbox
   );
 
@@ -629,4 +629,435 @@ test('findTopicInsertionPosition prefers closest exact heading match and saveSet
   };
   const pos = plugin.findTopicInsertionPosition(editor, 4, 'Surgery Complications', 'Anastomotic leak', 'anastomotic leak');
   assert.equal(pos.line, 3, 'Must match ## Surgery Complications instead of earlier ## Surgery');
+});
+
+test('BatchImageReviewModal progress bar starts at 0/N (not 3/N) and supports S/M/L/XL switcher with Large default', async () => {
+  const h = createHarness();
+  const plugin = new h.PluginClass({ vault: {}, workspace: { getLeavesOfType: () => [], getActiveViewOfType: () => null } }, {});
+  plugin.settings = h._test.normalizeSettings({});
+  assert.equal(plugin.settings.batchPreviewSize, 'lg', 'Default batchPreviewSize must be lg (Large)');
+
+  let cacheCleared = 0;
+  plugin.searchCache = { clear() { cacheCleared++; } };
+  plugin.saveData = async () => {};
+
+  const suggestions = [1, 2, 3, 4, 5].map((n) => ({
+    heading: `Topic ${n}`,
+    line: n,
+    visualConcept: `Concept ${n}`,
+    visualType: 'diagram',
+    recommendedQuery: `query ${n}`
+  }));
+  const view = {
+    scanResults: { suggestions },
+    insertedSuggestionIndices: new Set(),
+    getEffectiveQuery: (q) => q,
+    render: () => {}
+  };
+
+  const modal = new h._test.BatchImageReviewModal({}, plugin, view);
+  const deferred = [];
+  modal.fetchSingleItem = (rItem) => new Promise((resolve) => {
+    deferred.push(() => {
+      rItem.items = [{ title: `Res ${rItem.suggestion.line}`, imageUrl: `https://example.com/${rItem.suggestion.line}.png` }];
+      rItem.loading = false;
+      rItem.included = true;
+      rItem.selectedIndices = [0];
+      resolve({ cached: false });
+    });
+  });
+
+  const openPromise = modal.onOpen();
+  // Wait 1 microtask tick so all 3 concurrent workers have started but none resolved
+  await Promise.resolve();
+
+  const progressBar = modal.contentEl.querySelector('.mif-batch-progress-bar');
+  const progressLabel = modal.contentEl.querySelector('.mif-batch-progress-label');
+  assert.equal(modal.contentEl.hasClass('is-size-lg'), true, 'Modal must default to is-size-lg');
+  assert.equal(progressBar.value, 0, 'Progress bar value must start at 0 before first fetch finishes');
+  assert.ok(progressLabel.text.includes('(0/5)'), `Progress label must show (0/5), got: ${progressLabel.text}`);
+
+  // Resolve 1 worker -> progress advances to 1/5 cleanly
+  deferred.shift()();
+  await new Promise((r) => setTimeout(r, 0));
+  assert.equal(progressBar.value, 1);
+  assert.ok(progressLabel.text.includes('(1/5)'), `Expected (1/5), got: ${progressLabel.text}`);
+
+  // Flush remaining workers (including workers 4 and 5 queued behind concurrency=3)
+  while (deferred.length > 0 || modal.isFetchingAll) {
+    if (deferred.length > 0) deferred.shift()();
+    await new Promise((r) => setTimeout(r, 0));
+  }
+  await openPromise;
+  assert.equal(progressBar.value, 5);
+
+  // Test S/M/L/XL size switcher buttons
+  const sizeBtns = modal.contentEl.querySelectorAll('.mif-batch-size-btn');
+  assert.equal(sizeBtns.length, 4, 'Must render S, M, L, XL size buttons');
+  const sBtn = sizeBtns.find(b => b.text === 'S');
+  const xlBtn = sizeBtns.find(b => b.text === 'XL');
+  await sBtn.onclick();
+  assert.ok(modal.contentEl.hasClass('is-size-sm'));
+  assert.ok(!modal.contentEl.hasClass('is-size-lg'));
+  assert.equal(plugin.settings.batchPreviewSize, 'sm');
+  await xlBtn.onclick();
+  assert.ok(modal.contentEl.hasClass('is-size-xl'));
+  assert.equal(plugin.settings.batchPreviewSize, 'xl');
+  assert.equal(cacheCleared, 0, 'Switching preview size must preserve searchCache');
+
+  modal.close();
+});
+
+test('Partial-note scanning preserves [L<n>], filters out-of-scope suggestions, and locks insertion inside scope', async () => {
+  const h = createHarness();
+  const noteLines = [
+    '# Gallbladder Notes',          // L1
+    '## Preop',                     // L2
+    '- NPO overnight',              // L3
+    '- Consent obtained',           // L4
+    '## Intraop Steps',             // L5
+    '- Exposure of Calot triangle', // L6
+    '  - Identify cystic duct',     // L7
+    '- Clip cystic artery',         // L8
+    '## Postop',                    // L9
+    '- Early feeding',              // L10
+    '- Discharge planning'          // L11
+  ];
+  const noteContent = noteLines.join('\n');
+
+  const sections = h._test.extractNoteSections(noteContent);
+  assert.equal(sections.length, 4);
+  assert.deepEqual(
+    { heading: sections[2].heading, level: sections[2].level, startLine: sections[2].startLine, endLine: sections[2].endLine },
+    { heading: 'Intraop Steps', level: 2, startLine: 5, endLine: 8 }
+  );
+
+  const scope = h._test.normalizeScanScope({
+    mode: 'section',
+    startLine: 5,
+    endLine: 8,
+    label: 'Section: Intraop Steps (L5–L8)'
+  }, noteLines.length);
+
+  const prompt = h._test.GeminiScannerService.buildAltGPrompt('Gallbladder', noteContent, 15, scope);
+  assert.ok(prompt.includes('[L5] ## Intraop Steps'), 'Prompt must preserve real [L5] line prefix');
+  assert.ok(prompt.includes('[L6] - Exposure of Calot triangle'));
+  assert.ok(!prompt.includes('[L3] - NPO overnight'), 'Prompt must exclude lines outside scope');
+  assert.ok(!prompt.includes('[L10] - Early feeding'), 'Prompt must exclude later sections');
+
+  // Parse Gemini response with mix of in-scope, ±1 boundary, and out-of-scope lines
+  const rawResponse = JSON.stringify({
+    summary: 'Scoped Intraop scan',
+    suggestions: [
+      { heading: 'Preop', line: 2, visualConcept: 'Out above', visualType: 'diagram', recommendedQuery: 'preop' },
+      { heading: 'Intraop Steps', line: 4, visualConcept: 'Boundary clamp top', visualType: 'diagram', recommendedQuery: 'boundary top' },
+      { heading: 'Intraop Steps', line: 6, visualConcept: 'Calot triangle', visualType: 'diagram', recommendedQuery: 'calot triangle diagram' },
+      { heading: 'Postop', line: 11, visualConcept: 'Out below', visualType: 'clinical', recommendedQuery: 'postop' }
+    ]
+  });
+
+  const parsed = h._test.GeminiScannerService.parseGeminiResponse(rawResponse, noteLines.length, 25, scope);
+  assert.equal(parsed.filteredOutCount, 2, 'Out-of-scope lines L2 and L11 must be dropped');
+  assert.equal(parsed.suggestions.length, 2);
+  assert.equal(parsed.suggestions[0].line, 5, 'Line 4 within ±1 tolerance must clamp inside [5..8] to 5');
+  assert.equal(parsed.suggestions[1].line, 6);
+
+  // Verify findTopicInsertionPosition stays strictly inside headingless mid-section scope [6..8]
+  const plugin = new h.PluginClass({ vault: {}, workspace: { getLeavesOfType: () => [], getActiveViewOfType: () => null } }, {});
+  plugin.settings = h._test.normalizeSettings({});
+  const headinglessScope = h._test.normalizeScanScope({ mode: 'selection', startLine: 6, endLine: 8, label: 'Selection (L6–L8)' }, noteLines.length);
+  const editor = {
+    lineCount: () => noteLines.length,
+    getLine: (i) => noteLines[i] || '',
+    getValue: () => noteLines.join('\n'),
+    getCursor: () => ({ line: 2, ch: 0 })
+  };
+
+  // Even if passed Preop heading and line 2, insertion must stay inside [5..7] (0-indexed)
+  const boundedPos = plugin.findTopicInsertionPosition(editor, 2, 'Preop', 'Unmatched concept', 'unmatched', headinglessScope);
+  assert.ok(boundedPos.line >= 5 && boundedPos.line <= 7, `Position line ${boundedPos.line} escaped scope [5..7]`);
+
+  // Verify batchInsertImages also locks target insertion inside Intraop Steps
+  const mutableLines = [...noteLines];
+  const batchFile = new h.TFile('Gallbladder.md');
+  const batchEditor = {
+    lineCount: () => mutableLines.length,
+    getLine: (i) => mutableLines[i] || '',
+    getValue: () => mutableLines.join('\n'),
+    getCursor: () => ({ line: 1, ch: 0 }),
+    replaceRange: (str, pos) => {
+      const insertLines = str.split('\n');
+      mutableLines[pos.line] = mutableLines[pos.line].slice(0, pos.ch) + insertLines[0] + mutableLines[pos.line].slice(pos.ch);
+      if (insertLines.length > 1) mutableLines.splice(pos.line + 1, 0, ...insertLines.slice(1));
+    }
+  };
+  const batchView = { file: batchFile, editor: batchEditor };
+  const batchCtx = { view: batchView, file: batchFile, editor: batchEditor, path: 'Gallbladder.md', content: mutableLines.join('\n') };
+  const batchPlugin = new h.PluginClass({
+    vault: {
+      getAbstractFileByPath: (p) => p === 'Gallbladder.md' ? batchFile : null,
+      createFolder: async () => {},
+      createBinary: async () => {},
+      readBinary: async () => Buffer.from([137, 80, 78, 71, 13, 10, 26, 10])
+    },
+    workspace: { getLeavesOfType: () => [{ view: batchView }] }
+  }, {});
+  batchPlugin.settings = h._test.normalizeSettings({ attachmentFolder: 'Attachments', includeCaption: false });
+  batchPlugin.writeQueue = Promise.resolve();
+  batchPlugin.downloadImage = async () => ({ bytes: Buffer.from([137, 80, 78, 71, 13, 10, 26, 10, 1]), ext: 'png' });
+
+  await batchPlugin.batchInsertImages([{
+    suggestionIndex: 0,
+    targetLine: 2,
+    targetHeading: 'Preop',
+    targetConcept: 'Calot triangle cystic duct',
+    targetQuery: 'calot triangle',
+    targetScope: headinglessScope,
+    imageItem: { title: 'Scoped Calot Img', imageUrl: 'https://example.com/calot.png', domain: 'example.com', targetContext: batchCtx, targetScope: headinglessScope }
+  }]);
+
+  const updatedDoc = mutableLines.join('\n');
+  const calotIdx = updatedDoc.indexOf('Scoped-Calot-Img');
+  assert.ok(calotIdx !== -1, 'Scoped image must be inserted');
+  assert.ok(calotIdx > updatedDoc.indexOf('## Intraop Steps') && calotIdx < updatedDoc.indexOf('## Postop'), 'batchInsertImages must stay strictly inside Intraop Steps');
+});
+
+test('Scanner scope UI auto-selects significant selection and category filter pills keep original card indices', async () => {
+  const h = createHarness();
+  const noteLines = [
+    '# Note',
+    '## Part A',
+    'Line A1',
+    '## Part B',
+    '- Multi-line surgical detail 1',
+    '- Multi-line surgical detail 2',
+    '## Part C',
+    'Line C1'
+  ];
+  const mockFile = new h.TFile('ScopedNote.md');
+  const mockEditor = {
+    lineCount: () => noteLines.length,
+    getLine: (i) => noteLines[i] || '',
+    getValue: () => noteLines.join('\n'),
+    getSelection: () => '- Multi-line surgical detail 1\n- Multi-line surgical detail 2',
+    getCursor: (edge) => edge === 'from' ? { line: 4, ch: 0 } : { line: 5, ch: 30 }
+  };
+  const mockView = { file: mockFile, editor: mockEditor };
+  const plugin = new h.PluginClass({ vault: {}, workspace: { getLeavesOfType: () => [{ view: mockView }], getActiveViewOfType: () => mockView } }, {});
+  plugin.settings = h._test.normalizeSettings({});
+  plugin.saveData = async () => {};
+
+  const view = new h._test.MedicalImageFinderView({ leaf: {} }, plugin);
+  view.currentTab = 'scan';
+  view.render();
+
+  assert.equal(view.scopeMode, 'selection', 'Multi-line editor selection must auto-select selection scope');
+  const copyBtn = view.contentEl.querySelector('.mif-scan-btn');
+  assert.ok(copyBtn.text.includes('Selection (L5–L6)'), `Copy button must display active selection scope, got: ${copyBtn.text}`);
+
+  const scope = view.getSelectedUiScope(mockView);
+  await view.applyScanResults({
+    summary: 'Scoped audit',
+    scope,
+    suggestions: [
+      { heading: 'Part B', line: 5, visualConcept: 'Diagram Concept', visualType: 'diagram', recommendedQuery: 'q1' },
+      { heading: 'Part B', line: 6, visualConcept: 'Xray Concept', visualType: 'radiology', recommendedQuery: 'q2' }
+    ]
+  });
+
+  const scopePill = view.contentEl.querySelector('.mif-scope-pill');
+  assert.ok(scopePill != null && scopePill.text.includes('Selection (L5–L6)'));
+
+  // Mark suggestion #0 inserted, then filter to Pending
+  view.insertedSuggestionIndices.add(0);
+  view.render();
+
+  const pills = view.contentEl.querySelectorAll('.mif-filter-pill');
+  const pendingPill = pills.find(p => p.text.startsWith('Pending'));
+  assert.ok(pendingPill != null);
+  pendingPill.onclick();
+
+  const visibleCards = view.contentEl.querySelectorAll('.mif-scan-card');
+  assert.equal(visibleCards.length, 1);
+  assert.equal(visibleCards[0].id, 'mif-card-1', 'Filtered view must preserve original suggestion index #1');
+});
+
+test('styles.css passes Obsidian CSS lint constraints (no !important, :has, or scrollbar-width/color)', () => {
+  const css = fs.readFileSync(path.join(__dirname, '..', 'styles.css'), 'utf8');
+  assert.equal(/!important/i.test(css), false, 'styles.css must contain zero !important rules');
+  assert.equal(/:\s*has\s*\(/i.test(css), false, 'styles.css must contain zero :has() selectors');
+  assert.equal(/scrollbar-(width|color)\s*:/i.test(css), false, 'styles.css must contain zero scrollbar-width/color properties');
+});
+
+test('BrightDataProvider sends udm=2 + parsed_light, prioritizes high-res original_image, and falls back gracefully', async () => {
+  const h = createHarness();
+  const bd = new h._test.BrightDataProvider('bd-key', 'serp_api1');
+  const sentBodies = [];
+
+  h.setRequestUrl(async (opts) => {
+    const body = JSON.parse(opts.body);
+    sentBodies.push(body);
+    return {
+      status: 200,
+      json: {
+        images: [
+          {
+            title: 'Tiny Icon',
+            image: 'https://encrypted-tbn0.gstatic.com/images?q=t1',
+            original_image: 'https://site.com/icon.png',
+            original_width: 64,
+            original_height: 64,
+            link: 'https://site.com/page1'
+          },
+          {
+            title: 'Hidden Result',
+            is_hidden: true,
+            original_image: 'https://site.com/hidden.png',
+            original_width: 1000,
+            original_height: 1000,
+            link: 'https://site.com/hidden'
+          },
+          {
+            title: 'Hashimoto Histology Full-Res',
+            image: 'https://encrypted-tbn0.gstatic.com/images?q=t3',
+            image_width: 246,
+            image_height: 162,
+            original_image: 'https://pathologyoutlines.com/imgau/hashimoto1200.jpg',
+            original_width: 1200,
+            original_height: 800,
+            link: 'https://pathologyoutlines.com/topic/thyroidhashimoto.html'
+          },
+          {
+            title: 'Full JSON Item With Only Thumb Dims',
+            image: 'data:image/jpeg;base64,/9j/4AAQ',
+            image_width: 225,
+            image_height: 225,
+            original_image: 'https://radiopaedia.org/images/fullres_goiter.jpg',
+            link: 'https://radiopaedia.org/cases/goiter'
+          }
+        ]
+      }
+    };
+  });
+
+  const res = await bd.search('hashimoto thyroiditis histology');
+  assert.equal(sentBodies[0].url, 'https://www.google.com/search?q=hashimoto%20thyroiditis%20histology&udm=2');
+  assert.equal(sentBodies[0].data_format, 'parsed_light');
+  assert.equal(res.length, 3, 'Hidden item must be excluded');
+  assert.equal(res[0].imageUrl, 'https://pathologyoutlines.com/imgau/hashimoto1200.jpg', 'High-res item must rank before 64x64 icon');
+  assert.equal(res[0].width, 1200);
+  assert.equal(res[0].height, 800);
+  assert.equal(res[1].width, null, 'Must NOT stamp 225px thumb dim onto separate original_image');
+  assert.equal(res[2].width, 64, 'Low-res 64x64 item must be demoted after full-res items');
+
+  // Verify automatic retry without data_format if a custom zone rejects parsed_light
+  sentBodies.length = 0;
+  let attempt = 0;
+  h.setRequestUrl(async (opts) => {
+    attempt++;
+    const body = JSON.parse(opts.body);
+    sentBodies.push(body);
+    if (attempt === 1) {
+      return { status: 400, json: { error: 'Unsupported data_format parsed_light' }, text: '' };
+    }
+    return {
+      status: 200,
+      json: {
+        images: [{
+          title: 'Fallback Original',
+          image: 'data:image/jpeg;base64,abc',
+          original_image: 'https://example.org/fallback_highres.png',
+          link: 'https://example.org/article'
+        }]
+      }
+    };
+  });
+
+  const retryRes = await bd.search('goiter xray');
+  assert.equal(sentBodies.length, 2);
+  assert.equal(sentBodies[0].data_format, 'parsed_light');
+  assert.equal(sentBodies[1].data_format, undefined);
+  assert.equal(retryRes[0].imageUrl, 'https://example.org/fallback_highres.png');
+
+  // Verify Case E raw HTML parser extracts paired full-res script tuples first
+  h.setRequestUrl(async () => ({
+    status: 200,
+    json: {
+      body: '<html><script>["https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcTest",183,275],["https://upload.wikimedia.org/commons/full.jpg",900,1400]</script></html>'
+    }
+  }));
+  const htmlRes = await bd.search('tracheal deviation');
+  assert.equal(htmlRes[0].imageUrl, 'https://upload.wikimedia.org/commons/full.jpg');
+  assert.equal(htmlRes[0].width, 1400);
+  assert.equal(htmlRes[0].height, 900);
+});
+
+test('Batch & Search thumbnails load full-res imageUrl and ignore fallback thumbnail dimensions', async () => {
+  const h = createHarness();
+  const plugin = new h.PluginClass({ vault: {}, workspace: { getLeavesOfType: () => [], getActiveViewOfType: () => null } }, {});
+  plugin.settings = h._test.normalizeSettings({ defaultProvider: 'brightdata', brightDataApiKey: 'key' });
+  plugin.bindAction = () => {};
+
+  const view = {
+    scanResults: {
+      suggestions: [{ heading: 'H1', line: 1, visualConcept: 'Concept', visualType: 'diagram', recommendedQuery: 'q1' }]
+    },
+    scanContext: null,
+    insertedSuggestionIndices: new Set(),
+    getEffectiveQuery: (q) => q
+  };
+
+  const modal = new h._test.BatchImageReviewModal({}, plugin, view);
+  const item = {
+    title: 'Hotlink Protected FullRes',
+    imageUrl: 'https://publisher.org/full_1200x900.png',
+    thumbnailUrl: 'https://encrypted-tbn0.gstatic.com/images?q=246',
+    width: null,
+    height: null
+  };
+  modal.fetchSingleItem = async (rItem) => {
+    rItem.items = [item];
+    rItem.loading = false;
+    rItem.included = true;
+    rItem.selectedIndices = [0];
+  };
+
+  await modal.onOpen();
+  const img = modal.contentEl.querySelector('.mif-batch-thumb-img');
+  const overlay = modal.contentEl.querySelector('.mif-thumb-overlay');
+  assert.equal(img.src, 'https://publisher.org/full_1200x900.png', 'Batch thumbnail must prioritize full-res imageUrl over 246px thumbnailUrl');
+
+  // Simulate inline hotlink failure -> falls back to thumbnailUrl and fires onload at 246x185
+  img.onerror();
+  assert.equal(img.src, 'https://encrypted-tbn0.gstatic.com/images?q=246');
+  img.naturalWidth = 246;
+  img.naturalHeight = 185;
+  img.onload();
+  assert.equal(item.width, null, 'Fallback thumbnail 246px must NOT overwrite unknown original_image width');
+  assert.equal(overlay.hasClass('is-lowres'), false, 'Fallback thumbnail must NOT stamp false Low res warning');
+  modal.close();
+
+  // Now simulate clean full-res load in Search View
+  const searchView = new h._test.MedicalImageFinderView({ leaf: {} }, plugin);
+  const fullItem = {
+    title: 'Direct FullRes',
+    imageUrl: 'https://openaccess.org/hi_res.png',
+    thumbnailUrl: 'https://encrypted-tbn0.gstatic.com/images?q=225',
+    width: null,
+    height: null
+  };
+  searchView.currentTab = 'search';
+  searchView.results = [fullItem];
+  searchView.render();
+
+  const sImg = searchView.contentEl.querySelector('.mif-thumb');
+  const sOverlay = searchView.contentEl.querySelector('.mif-thumb-overlay');
+  assert.equal(sImg.src, 'https://openaccess.org/hi_res.png');
+  sImg.naturalWidth = 1400;
+  sImg.naturalHeight = 1050;
+  sImg.onload();
+  assert.equal(fullItem.width, 1400);
+  assert.equal(fullItem.height, 1050);
+  assert.equal(sOverlay.text, '1400×1050');
+  assert.equal(sOverlay.hasClass('is-lowres'), false);
 });

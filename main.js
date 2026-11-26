@@ -22,6 +22,7 @@ const DEFAULT_SETTINGS = {
   defaultFilterMode: "all",
   attachmentFolder: "Attachments/MedicalImages",
   defaultImageWidth: 500,
+  batchPreviewSize: "lg",
   includeCaption: false,
   googleApiKey: "",
   googleCx: "",
@@ -154,11 +155,13 @@ function openExternalUrl(value) {
   return false;
 }
 
-function bindImageFallback(img, fallbackUrl) {
+function bindImageFallback(img, fallbackUrl, isThumbFallback = true) {
   let triedFallback = false;
+  img._usingThumbFallback = false;
   img.onerror = () => {
     if (!triedFallback && fallbackUrl && img.src !== fallbackUrl) {
       triedFallback = true;
+      img._usingThumbFallback = Boolean(isThumbFallback);
       img.src = fallbackUrl;
       return;
     }
@@ -166,6 +169,131 @@ function bindImageFallback(img, fallbackUrl) {
     if (typeof img.addClass === 'function') img.addClass('mif-img-broken');
     else if (img.classList) img.classList.add('mif-img-broken');
   };
+}
+
+function syncDimensionBadge(badgeEl, width, height, { fullLabel = false } = {}) {
+  if (!badgeEl) return;
+  const lowClass = fullLabel ? 'mif-badge-lowres' : 'is-lowres';
+  if (!width || !height) {
+    badgeEl.style.display = 'none';
+    return;
+  }
+  badgeEl.style.display = '';
+  if (width < 250 || height < 250) {
+    if (typeof badgeEl.addClass === 'function') badgeEl.addClass(lowClass);
+    badgeEl.setText(fullLabel ? `⚠️ Low res (${width}×${height} px)` : `⚠️ ${width}×${height}`);
+  } else {
+    if (typeof badgeEl.removeClass === 'function') badgeEl.removeClass(lowClass);
+    badgeEl.setText(fullLabel ? `${width} × ${height} px` : `${width}×${height}`);
+  }
+}
+
+function bindHighResPreview(img, badgeEl, item, options = {}) {
+  const fullUrl = item.imageUrl || item.thumbnailUrl;
+  const thumbUrl = item.thumbnailUrl;
+  const isDistinctThumb = Boolean(thumbUrl && item.imageUrl && thumbUrl !== item.imageUrl);
+  bindImageFallback(img, thumbUrl, isDistinctThumb);
+  syncDimensionBadge(badgeEl, item.width, item.height, options);
+  img.onload = () => {
+    const nw = img.naturalWidth || 0;
+    const nh = img.naturalHeight || 0;
+    if (nw > 0 && nh > 0 && !img._usingThumbFallback) {
+      if (!item.width || !item.height) {
+        item.width = nw;
+        item.height = nh;
+      }
+      syncDimensionBadge(badgeEl, item.width, item.height, options);
+    }
+  };
+  if (fullUrl) img.src = fullUrl;
+}
+
+const BATCH_SIZE_PRESETS = [
+  { id: 'sm', label: 'S', title: 'Small thumbnails (100px)' },
+  { id: 'md', label: 'M', title: 'Medium thumbnails (160px)' },
+  { id: 'lg', label: 'L', title: 'Large thumbnails (230px)' },
+  { id: 'xl', label: 'XL', title: 'Extra Large thumbnails (310px)' }
+];
+
+function extractNoteSections(noteContent) {
+  if (!noteContent || typeof noteContent !== 'string') return [];
+  const lines = noteContent.split(/\r?\n/);
+  const sections = [];
+  let inFence = false;
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    if (/^\s*```/.test(line)) {
+      inFence = !inFence;
+      continue;
+    }
+    if (inFence) continue;
+    const m = line.match(/^(#{1,6})\s+(.*)/);
+    if (m) {
+      const level = m[1].length;
+      const heading = cleanText(m[2]) || m[2].trim();
+      sections.push({
+        heading,
+        level,
+        startLine: i + 1,
+        endLine: lines.length
+      });
+    }
+  }
+  for (let idx = 0; idx < sections.length; idx++) {
+    const cur = sections[idx];
+    for (let j = idx + 1; j < sections.length; j++) {
+      if (sections[j].level <= cur.level) {
+        cur.endLine = sections[j].startLine - 1;
+        break;
+      }
+    }
+  }
+  return sections;
+}
+
+function findEnclosingHeading(lines, line1Based) {
+  const maxIdx = Math.max(0, Math.min((line1Based || 1) - 1, lines.length - 1));
+  for (let i = maxIdx; i >= 0; i--) {
+    const m = (lines[i] || '').match(/^(#{1,6})\s+(.*)/);
+    if (m) return cleanText(m[2]) || m[2].trim();
+  }
+  return '';
+}
+
+function normalizeScanScope(scope, totalLines = Infinity) {
+  if (!scope || typeof scope !== 'object' || scope.mode === 'full') return null;
+  const maxVal = (typeof totalLines === 'number' && isFinite(totalLines) && totalLines >= 1) ? totalLines : Infinity;
+  let startLine = parseInt(scope.startLine, 10);
+  let endLine = parseInt(scope.endLine, 10);
+  if (isNaN(startLine) || startLine < 1) startLine = 1;
+  if (maxVal !== Infinity && startLine > maxVal) startLine = maxVal;
+  if (isNaN(endLine) || endLine < startLine) endLine = startLine;
+  if (maxVal !== Infinity && endLine > maxVal) endLine = maxVal;
+  return {
+    mode: scope.mode || 'custom',
+    startLine,
+    endLine,
+    label: String(scope.label || `Lines ${startLine}–${endLine}`).trim(),
+    parentHeading: typeof scope.parentHeading === 'string' ? scope.parentHeading.trim() : ''
+  };
+}
+
+function prepareScopedLines(noteContent, scope = null) {
+  const allLines = String(noteContent || '').split(/\r?\n/);
+  const totalLines = allLines.length;
+  const normScope = normalizeScanScope(scope, totalLines);
+  const startLine = normScope ? normScope.startLine : 1;
+  const endLine = normScope ? normScope.endLine : totalLines;
+  const scopedLines = allLines.slice(startLine - 1, endLine);
+  let totalImagesFound = 0;
+  for (const l of scopedLines) {
+    totalImagesFound += (l.match(/!\[\[.*?\]\]|!\[.*?\]\(.*?\)/g) || []).length;
+  }
+  const parentHeading = normScope
+    ? (normScope.parentHeading || findEnclosingHeading(allLines, startLine))
+    : '';
+  const effectiveScope = normScope ? { ...normScope, parentHeading } : null;
+  return { allLines, totalLines, startLine, endLine, scopedLines, totalImagesFound, scope: effectiveScope };
 }
 
 const knownSecrets = new Set();
@@ -198,6 +326,7 @@ function normalizeSettings(saved) {
   if (!['duckduckgo', 'wikimedia', 'google_cse', 'serpapi', 'brave', 'brightdata'].includes(settings.defaultProvider)) settings.defaultProvider = 'duckduckgo';
   if (!MEDICAL_VISUAL_FILTERS.some(f => f.id === settings.defaultFilterMode)) settings.defaultFilterMode = 'all';
   if (!['gemini','groq','openrouter','offline'].includes(settings.aiBackend)) settings.aiBackend = 'gemini';
+  if (!['sm', 'md', 'lg', 'xl'].includes(settings.batchPreviewSize)) settings.batchPreviewSize = 'lg';
   if (typeof settings.groqApiKey !== 'string') settings.groqApiKey = '';
   if (typeof settings.openAiBaseUrl !== 'string') settings.openAiBaseUrl = 'https://openrouter.ai/api/v1';
   if (typeof settings.openAiApiKey !== 'string') settings.openAiApiKey = '';
@@ -626,13 +755,16 @@ class BrightDataProvider {
       );
     }
     const q = query.trim();
-    const targetUrl = `https://www.google.com/search?q=${encodeURIComponent(q)}&tbm=isch&udm=2`;
+    // Always keep q= first per Bright Data Google Images guidelines; udm=2 is active Google Images parameter
+    const targetUrl = `https://www.google.com/search?q=${encodeURIComponent(q)}&udm=2`;
+
+    const isGoogleTbn = (u) => typeof u === "string" && /encrypted-tbn\d*\.gstatic\.com\/images/i.test(u);
 
     const unwrapSourceLink = (rawLink) => {
       if (!rawLink || typeof rawLink !== "string") return "";
       try {
         const u = new URL(rawLink, "https://www.google.com");
-        if (u.hostname.includes("google.") && u.pathname === "/url") {
+        if (u.hostname.includes("google.") && (u.pathname === "/url" || u.pathname === "/goto")) {
           const target = u.searchParams.get("q") || u.searchParams.get("url") || "";
           const valid = httpUrl(target);
           if (valid) return valid;
@@ -641,8 +773,29 @@ class BrightDataProvider {
       return httpUrl(rawLink) || rawLink;
     };
 
-    // 1. Try Fast SERP API endpoint
-    try {
+    const prioritizeHighRes = (mappedList) => {
+      const highRes = [];
+      const fallback = [];
+      for (const item of mappedList) {
+        const lowDims = item.width && item.height && (item.width < 250 || item.height < 250);
+        const lowUri = !item.imageUrl || item.imageUrl.startsWith("data:image/") || isGoogleTbn(item.imageUrl);
+        if (lowDims || lowUri) {
+          fallback.push(item);
+        } else {
+          highRes.push(item);
+        }
+      }
+      return [...highRes, ...fallback].slice(0, 30);
+    };
+
+    const parseSerpPayload = async (useLightJson) => {
+      const bodyPayload = {
+        zone: this.zone || "serp_api1",
+        url: targetUrl,
+        format: "json"
+      };
+      if (useLightJson) bodyPayload.data_format = "parsed_light";
+
       const resp = await requestUrl({
         url: "https://api.brightdata.com/request",
         method: "POST",
@@ -650,175 +803,249 @@ class BrightDataProvider {
           "Authorization": `Bearer ${this.apiKey}`,
           "Content-Type": "application/json"
         },
-        body: JSON.stringify({
-          zone: this.zone || "serp_api1",
-          url: targetUrl,
-          format: "json"
-        })
+        body: JSON.stringify(bodyPayload)
       });
 
-      if (resp.status !== 200) {
-        throw new Error(`Bright Data SERP HTTP ${resp.status}`);
+      let data = typeof resp.json === "object" && resp.json !== null ? resp.json : null;
+      if (!data && typeof resp.text === "string") {
+        try { data = JSON.parse(resp.text); } catch (_) {}
       }
 
-      if (resp.status === 200) {
-        let data = typeof resp.json === "object" && resp.json !== null ? resp.json : null;
-        if (!data && typeof resp.text === "string") {
-          try { data = JSON.parse(resp.text); } catch (_) {}
-        }
+      if (resp.status !== 200) {
+        const msg = data?.error || data?.message || resp.text || "";
+        const err = new Error(`Bright Data SERP HTTP ${resp.status}${msg ? `: ${msg}` : ""}`);
+        err.status = resp.status;
+        err.canRetryWithoutLight = resp.status === 400 || resp.status === 422 || /data_format|parsed_light/i.test(String(msg));
+        throw err;
+      }
 
-        // Unwrap envelope if Bright Data returned { status_code: 200, headers: {...}, body: "..." }
-        let rawBodyString = "";
-        if (data && data.body) {
-          if (typeof data.body === "string") {
-            rawBodyString = data.body;
-            try { data = JSON.parse(data.body); } catch (_) {}
-          } else if (typeof data.body === "object" && data.body !== null) {
-            data = data.body;
+      // Unwrap envelope if Bright Data returned { status_code: 200, headers: {...}, body: "..." }
+      let rawBodyString = "";
+      if (data && data.body) {
+        if (typeof data.body === "string") {
+          rawBodyString = data.body;
+          try { data = JSON.parse(data.body); } catch (_) {}
+        } else if (typeof data.body === "object" && data.body !== null) {
+          data = data.body;
+        }
+      }
+
+      if (data && data.error) {
+        const err = new Error(`Bright Data error: ${data.error}`);
+        err.canRetryWithoutLight = /data_format|parsed_light/i.test(String(data.error));
+        throw err;
+      }
+      if (data && data.message && !data.images && !data.images_results && !data.organic) {
+        const err = new Error(`Bright Data message: ${data.message}`);
+        err.canRetryWithoutLight = /data_format|parsed_light/i.test(String(data.message));
+        throw err;
+      }
+
+      return { data, rawBodyString };
+    };
+
+    // 1. Try Fast SERP API endpoint (parsed_light returns 100 full-res original_image items + dimensions)
+    try {
+      let parsedResp;
+      try {
+        parsedResp = await parseSerpPayload(true);
+      } catch (firstErr) {
+        if (firstErr?.canRetryWithoutLight) {
+          parsedResp = await parseSerpPayload(false);
+        } else {
+          throw firstErr;
+        }
+      }
+
+      let { data, rawBodyString } = parsedResp;
+
+      // Retry without parsed_light if zone returned JSON lacking an images array
+      if (data && typeof data === "object" && !Array.isArray(data) && !Array.isArray(data.images) && !Array.isArray(data.images_results) && !rawBodyString) {
+        try {
+          const retryResp = await parseSerpPayload(false);
+          if (retryResp.data && (Array.isArray(retryResp.data.images) || Array.isArray(retryResp.data.images_results) || retryResp.rawBodyString)) {
+            data = retryResp.data;
+            rawBodyString = retryResp.rawBodyString;
           }
-        }
+        } catch (_) {}
+      }
 
-        if (data && data.error) {
-          throw new Error(`Bright Data error: ${data.error}`);
-        }
-        if (data && data.message && !data.images && !data.images_results && !data.organic) {
-          throw new Error(`Bright Data message: ${data.message}`);
-        }
+      // Case A: data.images array (Standard Light JSON & Full JSON Google Images SERP)
+      if (data && Array.isArray(data.images) && data.images.length > 0) {
+        const visible = data.images.filter(item => item && !item.is_hidden && !item.blurred);
+        const pool = (visible.length > 0 ? visible : data.images).slice(0, 100);
+        const mapped = pool.map((item) => {
+          const cleanSource = unwrapSourceLink(item.link);
+          const origUrl = httpUrl(item.original_image) || "";
+          const chosenUrl = origUrl || item.image || item.thumbnail;
+          const thumbUrl = item.image || item.thumbnail || chosenUrl;
+          let domain = "";
+          try {
+            if (origUrl) domain = new URL(origUrl).hostname;
+            else if (cleanSource) domain = new URL(cleanSource).hostname;
+          } catch (_) {}
+          if (domain.includes("google.") && item.title) {
+            domain = item.title;
+          } else if (!domain && item.title) {
+            domain = item.title;
+          }
+          let title = decodeHtmlEntities(item.source || item.title) || q;
+          if (item.title && typeof item.title === 'string' && title.endsWith(item.title + item.title)) {
+            title = title.slice(0, -item.title.length);
+          }
+          const origW = Number(item.original_width) > 0 ? Number(item.original_width) : null;
+          const origH = Number(item.original_height) > 0 ? Number(item.original_height) : null;
+          // Do NOT label a full-res original_image with thumbnail dimensions (image_width is ~225px preview)
+          const useThumbDims = !origUrl || origUrl === thumbUrl;
+          const width = origW || (useThumbDims && Number(item.image_width) > 0 ? Number(item.image_width) : null);
+          const height = origH || (useThumbDims && Number(item.image_height) > 0 ? Number(item.image_height) : null);
 
-        // Case A: data.images array (Standard Google Images SERP)
-        if (data && Array.isArray(data.images) && data.images.length > 0) {
-          return data.images.slice(0, 30).map((item) => {
+          return {
+            title,
+            imageUrl: chosenUrl,
+            thumbnailUrl: thumbUrl,
+            sourceUrl: cleanSource || origUrl || targetUrl,
+            width,
+            height,
+            domain: domain.replace(/^www\./, "")
+          };
+        });
+        return prioritizeHighRes(mapped);
+      }
+
+      // Case B: data.images_results array
+      if (data && Array.isArray(data.images_results) && data.images_results.length > 0) {
+        const mapped = data.images_results.slice(0, 100).map((item) => {
+          const cleanSource = unwrapSourceLink(item.link);
+          const origUrl = httpUrl(item.original) || "";
+          let domain = "";
+          try {
+            if (origUrl) domain = new URL(origUrl).hostname;
+            else if (cleanSource) domain = new URL(cleanSource).hostname;
+          } catch (_) {}
+          if (domain.includes("google.") && item.source) {
+            domain = item.source;
+          } else if (!domain && item.source) {
+            domain = item.source;
+          }
+          return {
+            title: decodeHtmlEntities(item.title) || q,
+            imageUrl: origUrl || item.thumbnail,
+            thumbnailUrl: item.thumbnail || origUrl,
+            sourceUrl: cleanSource || origUrl || targetUrl,
+            width: Number(item.original_width) > 0 ? Number(item.original_width) : null,
+            height: Number(item.original_height) > 0 ? Number(item.original_height) : null,
+            domain: domain.replace(/^www\./, "")
+          };
+        });
+        return prioritizeHighRes(mapped);
+      }
+
+      // Case C: data.organic with images (if organic SERP returned embedded image items)
+      if (data && Array.isArray(data.organic) && data.organic.length > 0) {
+        const organicWithImages = data.organic.filter(item => item.image || item.images);
+        if (organicWithImages.length > 0) {
+          return organicWithImages.slice(0, 30).map((item) => {
             const cleanSource = unwrapSourceLink(item.link);
             let domain = "";
-            try {
-              if (item.original_image) domain = new URL(item.original_image).hostname;
-              else if (cleanSource) domain = new URL(cleanSource).hostname;
-            } catch (_) {}
-            if (domain.includes("google.") && item.title) {
-              domain = item.title;
-            } else if (!domain && item.title) {
-              domain = item.title;
-            }
-            let title = decodeHtmlEntities(item.source || item.title) || q;
-            if (item.title && typeof item.title === 'string' && title.endsWith(item.title + item.title)) {
-              title = title.slice(0, -item.title.length);
-            }
-            return {
-              title: title,
-              imageUrl: item.original_image || item.image,
-              thumbnailUrl: item.image || item.original_image,
-              sourceUrl: cleanSource || item.original_image || targetUrl,
-              width: item.original_width || item.image_width || null,
-              height: item.original_height || item.image_height || null,
-              domain: domain.replace(/^www\./, "")
-            };
-          });
-        }
-
-        // Case B: data.images_results array
-        if (data && Array.isArray(data.images_results) && data.images_results.length > 0) {
-          return data.images_results.slice(0, 30).map((item) => {
-            const cleanSource = unwrapSourceLink(item.link);
-            let domain = "";
-            try {
-              if (item.original) domain = new URL(item.original).hostname;
-              else if (cleanSource) domain = new URL(cleanSource).hostname;
-            } catch (_) {}
-            if (domain.includes("google.") && item.source) {
-              domain = item.source;
-            } else if (!domain && item.source) {
-              domain = item.source;
-            }
+            try { if (cleanSource) domain = new URL(cleanSource).hostname; } catch (_) {}
+            const imgUrl = item.original_image || item.image || (Array.isArray(item.images) ? item.images[0] : null);
             return {
               title: decodeHtmlEntities(item.title) || q,
-              imageUrl: item.original || item.thumbnail,
-              thumbnailUrl: item.thumbnail || item.original,
-              sourceUrl: cleanSource || item.original || targetUrl,
-              width: item.original_width || null,
-              height: item.original_height || null,
+              imageUrl: imgUrl,
+              thumbnailUrl: item.image || imgUrl,
+              sourceUrl: cleanSource || targetUrl,
+              width: Number(item.original_width) > 0 ? Number(item.original_width) : null,
+              height: Number(item.original_height) > 0 ? Number(item.original_height) : null,
               domain: domain.replace(/^www\./, "")
             };
           });
         }
+      }
 
-        // Case C: data.organic with images (if Light JSON was used)
-        if (data && Array.isArray(data.organic) && data.organic.length > 0) {
-          const organicWithImages = data.organic.filter(item => item.image || item.images);
-          if (organicWithImages.length > 0) {
-            return organicWithImages.slice(0, 30).map((item) => {
-              const cleanSource = unwrapSourceLink(item.link);
-              let domain = "";
-              try { if (cleanSource) domain = new URL(cleanSource).hostname; } catch (_) {}
-              const imgUrl = item.image || (Array.isArray(item.images) ? item.images[0] : null);
-              return {
-                title: decodeHtmlEntities(item.title) || q,
-                imageUrl: imgUrl,
-                thumbnailUrl: imgUrl,
-                sourceUrl: cleanSource || targetUrl,
-                width: null,
-                height: null,
-                domain: domain.replace(/^www\./, "")
-              };
+      // Case D: Top-level array
+      if (Array.isArray(data) && data.length > 0) {
+        const mapped = data.slice(0, 100).map((item) => {
+          const cleanSource = unwrapSourceLink(item.link || item.url);
+          let domain = "";
+          const src = httpUrl(item.original_image) || httpUrl(item.image_url) || item.image || item.url;
+          try { if (cleanSource) domain = new URL(cleanSource).hostname; } catch (_) {}
+          return {
+            title: decodeHtmlEntities(item.title) || q,
+            imageUrl: src,
+            thumbnailUrl: item.image || item.thumbnail || src,
+            sourceUrl: cleanSource || targetUrl,
+            width: Number(item.original_width) > 0 ? Number(item.original_width) : null,
+            height: Number(item.original_height) > 0 ? Number(item.original_height) : null,
+            domain: domain.replace(/^www\./, "")
+          };
+        });
+        return prioritizeHighRes(mapped);
+      }
+
+      // Case E: Fallback extraction from raw HTML string (prefers paired full-res inline script tuples over tbn0 thumbs)
+      if (rawBodyString && (typeof rawBodyString === 'string' && rawBodyString.includes('<'))) {
+        const unescapeHtmlUrl = (raw) => raw
+          .replace(/\\u0026/gi, '&')
+          .replace(/\\u003d/gi, '=')
+          .replace(/\\\//g, '/');
+
+        const foundImages = [];
+        const seen = new Set();
+        const pairedRe = /\["(https?:\/\/encrypted-tbn\d*\.gstatic\.com\/images\?q=[^"]+)",(\d+),(\d+)\],\["(https?:\/\/[^"]+)",(\d+),(\d+)\]/g;
+        let pm;
+        while ((pm = pairedRe.exec(rawBodyString)) !== null && foundImages.length < 30) {
+          const thumb = unescapeHtmlUrl(pm[1]);
+          const orig = httpUrl(unescapeHtmlUrl(pm[4]));
+          if (orig && !isGoogleTbn(orig) && !seen.has(orig)) {
+            seen.add(orig);
+            let domain = "";
+            try { domain = new URL(orig).hostname.replace(/^www\./, ""); } catch (_) {}
+            foundImages.push({
+              title: q,
+              imageUrl: orig,
+              thumbnailUrl: thumb,
+              sourceUrl: targetUrl,
+              width: Number(pm[6]) || null,
+              height: Number(pm[5]) || null,
+              domain: domain || "google.com"
             });
           }
         }
+        if (foundImages.length > 0) return prioritizeHighRes(foundImages);
 
-        // Case D: Top-level array
-        if (Array.isArray(data) && data.length > 0) {
-          return data.slice(0, 30).map((item) => {
-            const cleanSource = unwrapSourceLink(item.link || item.url);
-            let domain = "";
-            const src = item.original_image || item.image || item.image_url || item.url;
-            try { if (cleanSource) domain = new URL(cleanSource).hostname; } catch (_) {}
-            return {
-              title: decodeHtmlEntities(item.title) || q,
-              imageUrl: src,
-              thumbnailUrl: item.image || item.thumbnail || src,
-              sourceUrl: cleanSource || targetUrl,
-              width: item.original_width || null,
-              height: item.original_height || null,
-              domain: domain.replace(/^www\./, "")
-            };
-          });
-        }
-
-        // Case E: Fallback extraction from raw HTML string if Bright Data returns HTML
-        if (rawBodyString && (typeof rawBodyString === 'string' && rawBodyString.includes('<'))) {
-          const foundImages = [];
-          const seen = new Set();
-          const re = /"(https?:\/\/encrypted-tbn0\.gstatic\.com\/images\?q=[^"]+)"/g;
-          let m;
-          while ((m = re.exec(rawBodyString)) !== null && foundImages.length < 30) {
-            const u = m[1].replace(/\\u0026/g, '&');
-            if (!seen.has(u)) {
-              seen.add(u);
-              foundImages.push({
-                title: q,
-                imageUrl: u,
-                thumbnailUrl: u,
-                sourceUrl: targetUrl,
-                width: null,
-                height: null,
-                domain: "google.com"
-              });
-            }
+        const re = /"(https?:\/\/encrypted-tbn\d*\.gstatic\.com\/images\?q=[^"]+)"/g;
+        let m;
+        while ((m = re.exec(rawBodyString)) !== null && foundImages.length < 30) {
+          const u = unescapeHtmlUrl(m[1]);
+          if (!seen.has(u)) {
+            seen.add(u);
+            foundImages.push({
+              title: q,
+              imageUrl: u,
+              thumbnailUrl: u,
+              sourceUrl: targetUrl,
+              width: null,
+              height: null,
+              domain: "google.com"
+            });
           }
-          if (foundImages.length > 0) return foundImages;
         }
+        if (foundImages.length > 0) return foundImages;
+      }
 
-        // Legitimate empty search results (e.g. images: [])
-        if (data && (Array.isArray(data.images) || Array.isArray(data.images_results))) {
-          return [];
-        }
+      // Legitimate empty search results (e.g. images: [])
+      if (data && (Array.isArray(data.images) || Array.isArray(data.images_results))) {
+        return [];
+      }
 
-        // If parsed JSON has no images (e.g. Light JSON only returned organic text)
-        if (data && typeof data === "object") {
-          const keys = Object.keys(data).join(", ");
-          throw new Error(`Bright Data returned [${keys}], but no image grid. In Bright Data dashboard → serp_api1 → Configuration → Data format, select 'Full JSON' and click Save changes.`);
-        }
+      // If parsed JSON has no images (e.g. zone stripped image results)
+      if (data && typeof data === "object") {
+        const keys = Object.keys(data).join(", ");
+        throw new Error(`Bright Data returned [${keys}], but no image grid. In Bright Data dashboard → serp_api1 → Configuration → Data format, select 'Light JSON' or 'Full JSON' and click Save changes.`);
       }
     } catch (serpErr) {
-      if (serpErr.message && (serpErr.message.includes("Full JSON") || serpErr.message.includes("API Key") || serpErr.message.includes("Bright Data error:"))) {
+      if (serpErr.message && (serpErr.message.includes("Full JSON") || serpErr.message.includes("Light JSON") || serpErr.message.includes("API Key") || serpErr.message.includes("Bright Data error:"))) {
         throw serpErr;
       }
       // 2. Fallback to Dataset scraper API
@@ -860,7 +1087,7 @@ class BrightDataProvider {
       throw serpErr;
     }
 
-    throw new Error("Unexpected Bright Data response format. In Bright Data dashboard → serp_api1 → Configuration → Data format, select 'Full JSON' and Save changes.");
+    throw new Error("Unexpected Bright Data response format. In Bright Data dashboard → serp_api1 → Configuration → Data format, select 'Light JSON' or 'Full JSON' and Save changes.");
   }
 }
 
@@ -933,24 +1160,25 @@ class OfflineMedicalScanner {
     ];
   }
 
-  async scanNote(noteTitle, noteContent, maxSuggestions = 20, onProgress = null) {
+  async scanNote(noteTitle, noteContent, maxSuggestions = 20, onProgress = null, scope = null) {
     if (onProgress) onProgress("Running Local Medical Rules Engine...");
     maxSuggestions = maxSuggestions || 20;
 
-    const allLines = noteContent.split(/\r?\n/);
-    const totalLines = allLines.length;
-    let totalImagesFound = 0;
-    allLines.forEach(l => { totalImagesFound += (l.match(/!\[\[.*?\]\]|!\[.*?\]\(.*?\)/g) || []).length; });
+    const prepared = prepareScopedLines(noteContent, scope);
+    const { allLines, totalLines, startLine, endLine, totalImagesFound, scope: normScope } = prepared;
 
     const sectionList = [];
-    let currentHeading = "Introduction";
+    let currentHeading = normScope?.parentHeading || "Introduction";
     const lineHeadings = [];
 
     allLines.forEach((line, idx) => {
       const hm = line.match(/^(#{1,6})\s+(.*)$/);
       if (hm) {
         currentHeading = hm[2].replace(/[#*`_]/g, "").trim();
-        sectionList.push({ line: idx + 1, heading: currentHeading });
+        const lineNum = idx + 1;
+        if (lineNum >= startLine && lineNum <= endLine) {
+          sectionList.push({ line: lineNum, heading: currentHeading });
+        }
       }
       lineHeadings.push(currentHeading);
     });
@@ -959,7 +1187,7 @@ class OfflineMedicalScanner {
     const seenQueries = new Set();
     const rules = OfflineMedicalScanner.CLINICAL_RULES;
 
-    for (let i = 0; i < allLines.length; i++) {
+    for (let i = startLine - 1; i < endLine; i++) {
       if (matchedSuggestions.length >= maxSuggestions * 2) break;
       const lineText = allLines[i];
       if (!lineText || lineText.trim().length < 4) continue;
@@ -1011,21 +1239,23 @@ class OfflineMedicalScanner {
 
     if (matchedSuggestions.length === 0) {
       return {
-        summary: `Local Medical Rules Engine identified 0 visual opportunities across ${sectionList.length} sections.`,
+        summary: `Local Medical Rules Engine identified 0 visual opportunities${normScope ? ` in ${normScope.label}` : ` across ${sectionList.length} sections`}.`,
         existingImages: totalImagesFound,
-        suggestions: []
+        suggestions: [],
+        scope: normScope
       };
     }
 
     const sanitized = GeminiScannerService.sanitizeSuggestions({
-      summary: `Local Medical Rules Engine identified ${matchedSuggestions.length} high-yield visual opportunities across ${sectionList.length} sections.`,
+      summary: `Local Medical Rules Engine identified ${matchedSuggestions.length} high-yield visual opportunities${normScope ? ` in ${normScope.label}` : ` across ${sectionList.length} sections`}.`,
       suggestions: matchedSuggestions
     }, totalLines, maxSuggestions);
 
     return {
       summary: sanitized.summary,
       existingImages: totalImagesFound,
-      suggestions: sanitized.suggestions
+      suggestions: sanitized.suggestions,
+      scope: normScope
     };
   }
 }
@@ -1062,16 +1292,14 @@ class GroqScannerService {
     }
   }
 
-  async scanNote(noteTitle, noteContent, maxSuggestions, onProgress) {
+  async scanNote(noteTitle, noteContent, maxSuggestions, onProgress, scope = null) {
     if (!this.apiKey) throw new Error('Groq API key is missing. Enter it in Settings → Medical Image Finder.');
     maxSuggestions = maxSuggestions || 20;
 
-    const allLines = noteContent.split(/\r?\n/);
-    const totalLines = allLines.length;
-    let totalImagesFound = 0;
-    allLines.forEach(l => { totalImagesFound += (l.match(/!\[\[.*?\]\]|!\[.*?\]\(.*?\)/g) || []).length; });
+    const prepared = prepareScopedLines(noteContent, scope);
+    const { totalLines, startLine, scopedLines, totalImagesFound, scope: normScope } = prepared;
 
-    const digest = GeminiScannerService._buildDigest(allLines);
+    const digest = GeminiScannerService._buildDigest(scopedLines, startLine);
     if (onProgress) onProgress('Built digest (' + Math.round(digest.length / 1000) + 'k chars). Querying Groq...');
 
     const systemPrompt = `You are an expert MBBS medical educator (Bailey & Love Surgery, SRB, Gray's Anatomy, Robbins Pathology).
@@ -1087,7 +1315,7 @@ VISUAL CATEGORIES TO FIND:
 6. EMBRYOLOGY/PHYSIO: developmental diagrams, physiology graphs, drug mechanism diagrams
 
 RULES:
-- Use the L<number> prefix to report the EXACT line number for each suggestion
+- Use the L<number> prefix to report the EXACT line number for each suggestion${normScope ? `\n- SCAN SCOPE LOCKED: Analyze ONLY lines [L${normScope.startLine}] through [L${normScope.endLine}] (${normScope.label}). Return line numbers strictly between ${normScope.startLine} and ${normScope.endLine}.` : ''}
 - Give a specific 5-8 keyword search query that will find the best labeled medical image
 - visualType must be one of: "diagram","radiology","histology","clinical","criteria","embryology"
 
@@ -1095,7 +1323,7 @@ OUTPUT: valid JSON only, no markdown fences:
 {"summary":"one sentence","suggestions":[{"heading":"section heading","line":42,"visualConcept":"specific image title","visualType":"diagram","rationale":"why high-yield (2 sentences)","recommendedQuery":"5-8 keywords"}]}
 Return at most ` + maxSuggestions + ` suggestions ranked by educational impact.`;
 
-    const userContent = 'Note: "' + noteTitle + '" | Lines: ' + totalLines + ' | Existing images: ' + totalImagesFound + '\n\n' + digest;
+    const userContent = 'Note: "' + noteTitle + '" | Lines: ' + (normScope ? `${startLine}-${startLine + scopedLines.length - 1} of ${totalLines}` : totalLines) + ' | Existing images: ' + totalImagesFound + '\n\n' + digest;
 
     let availableModels = [];
     try {
@@ -1197,14 +1425,16 @@ Return at most ` + maxSuggestions + ` suggestions ranked by educational impact.`
     const rawText = data && data.choices && data.choices[0] && data.choices[0].message && data.choices[0].message.content;
     if (!rawText) throw new Error('Groq returned no content. Try again.');
 
-    const parsed = GeminiScannerService.parseGeminiResponse(rawText, totalLines, maxSuggestions);
+    const parsed = GeminiScannerService.parseGeminiResponse(rawText, totalLines, maxSuggestions, normScope);
     return {
       summary: parsed.summary || ('Scan complete via Groq (' + successfulModel + ').'),
       existingImages: totalImagesFound,
       suggestions: (parsed.suggestions || []).slice(0, maxSuggestions).filter(s =>
         s && typeof s.heading === 'string' && typeof s.visualConcept === 'string' &&
         typeof s.recommendedQuery === 'string' && Number.isInteger(s.line) && s.line >= 1
-      )
+      ),
+      scope: parsed.scope || normScope,
+      filteredOutCount: parsed.filteredOutCount || 0
     };
   }
 }
@@ -1223,29 +1453,29 @@ class OpenAiCompatibleScannerService {
     this.model = model || 'meta-llama/llama-3.3-70b-instruct:free';
   }
 
-  async scanNote(noteTitle, noteContent, maxSuggestions = 20, onProgress = null) {
+  async scanNote(noteTitle, noteContent, maxSuggestions = 20, onProgress = null, scope = null) {
     if (!this.apiKey) {
       throw new Error('API key is missing for the OpenAI-compatible provider. Enter it in Settings.');
     }
 
-    let submittedContent = noteContent;
+    const prepared = prepareScopedLines(noteContent, scope);
+    const { totalLines, startLine, endLine, scopedLines, totalImagesFound, scope: normScope } = prepared;
+    let numberedLines = scopedLines.map((l, i) => `[L${startLine + i}] ${l}`);
+    let fullNumberedText = numberedLines.join('\n');
     let truncationNote = "";
-    if (submittedContent.length > 60000) {
-      submittedContent = submittedContent.slice(0, 60000);
+    if (fullNumberedText.length > 60000) {
+      fullNumberedText = fullNumberedText.slice(0, 60000);
       truncationNote = " (scanned first 60,000 characters)";
     }
 
-    const allLines = submittedContent.split(/\r?\n/);
-    const totalLines = allLines.length;
-    let totalImagesFound = 0;
-    allLines.forEach(l => { totalImagesFound += (l.match(/!\[\[.*?\]\]|!\[.*?\]\(.*?\)/g) || []).length; });
+    if (onProgress) onProgress(`Preparing ${normScope ? normScope.label : 'full note'} for ${this.model} (${scopedLines.length} lines)...`);
 
-    if (onProgress) onProgress('Preparing full note for ' + this.model + ' (' + totalLines + ' lines)...');
-
-    const fullNumberedText = allLines.map((l, i) => `[L${i + 1}] ${l}`).join('\n');
+    const scopeInstruction = normScope
+      ? `\nSCAN SCOPE: PARTIAL NOTE ONLY — Lines ${normScope.startLine} to ${normScope.endLine} (${normScope.label}).${normScope.parentHeading ? ` Parent Section: ${normScope.parentHeading}.` : ''} Return suggestions ONLY for lines [L${normScope.startLine}] through [L${normScope.endLine}].`
+      : '';
 
     const systemPrompt = `You are an expert MBBS medical educator (Bailey & Love Surgery, SRB, Gray's Anatomy, Robbins Pathology).
-Analyze the complete medical note below. Each line is prefixed with [L<number>] showing the original note line number.
+Analyze the medical note excerpt below. Each line is prefixed with [L<number>] showing the original note line number.${scopeInstruction}
 Identify every high-yield location that needs an anatomical diagram, radiology sign, surgical repair view, criteria table, or histopathology image.
 
 OUTPUT: valid JSON only, no markdown fences:
@@ -1253,7 +1483,7 @@ OUTPUT: valid JSON only, no markdown fences:
 visualType must be one of: "diagram","radiology","histology","clinical","criteria","embryology"
 Return at most ${maxSuggestions} suggestions.`;
 
-    const userContent = `Note: "${noteTitle}" | Lines: ${totalLines} | Existing images: ${totalImagesFound}\n\n${fullNumberedText}`;
+    const userContent = `Note: "${noteTitle}" | Lines: ${normScope ? `${startLine}-${endLine} of ${totalLines}` : totalLines} | Existing images: ${totalImagesFound}\n\n${fullNumberedText}`;
 
     if (onProgress) onProgress('Scanning full note via ' + this.baseUrl + ' (' + this.model + ')...');
 
@@ -1293,14 +1523,16 @@ Return at most ${maxSuggestions} suggestions.`;
     const rawText = data && data.choices && data.choices[0] && data.choices[0].message && data.choices[0].message.content;
     if (!rawText) throw new Error('Provider returned no content. Try another model or check rate limits.');
 
-    const parsed = GeminiScannerService.parseGeminiResponse(rawText, totalLines, maxSuggestions);
+    const parsed = GeminiScannerService.parseGeminiResponse(rawText, totalLines, maxSuggestions, normScope);
     return {
       summary: (parsed.summary || ('Scan complete via ' + this.model)) + truncationNote,
       existingImages: totalImagesFound,
       suggestions: (parsed.suggestions || []).slice(0, maxSuggestions).filter(s =>
         s && typeof s.heading === 'string' && typeof s.visualConcept === 'string' &&
         typeof s.recommendedQuery === 'string' && Number.isInteger(s.line) && s.line >= 1
-      )
+      ),
+      scope: parsed.scope || normScope,
+      filteredOutCount: parsed.filteredOutCount || 0
     };
   }
 }
@@ -1312,9 +1544,9 @@ class GeminiScannerService {
     this.plugin = plugin;
   }
 
-  static _buildDigest(allLines) {
+  static _buildDigest(allLines, startLineOffset = 1) {
     if (allLines.length <= 400) {
-      return allLines.map((l, i) => `[L${i + 1}] ${l}`).join('\n');
+      return allLines.map((l, i) => `[L${startLineOffset + i}] ${l}`).join('\n');
     }
     const MAX_CHARS = 28000;
     const selected = [];
@@ -1324,7 +1556,7 @@ class GeminiScannerService {
     // First pass: keep all headings so full note structure is preserved
     for (let i = 0; i < allLines.length; i++) {
       if (/^#{1,6}\s+/.test(allLines[i])) {
-        const entry = `[L${i + 1}] ${allLines[i]}`;
+        const entry = `[L${startLineOffset + i}] ${allLines[i]}`;
         if (totalChars + entry.length + 1 <= MAX_CHARS) {
           seen.add(i);
           selected.push({ idx: i, text: entry });
@@ -1353,7 +1585,7 @@ class GeminiScannerService {
       for (let s = 0; s < budgetCount; s++) {
         const idx = contentIndices[Math.min(contentIndices.length - 1, Math.floor(s * stride))];
         if (seen.has(idx)) continue;
-        const entry = `[L${idx + 1}] ${allLines[idx]}`;
+        const entry = `[L${startLineOffset + idx}] ${allLines[idx]}`;
         if (totalChars + entry.length + 1 > MAX_CHARS) continue;
         seen.add(idx);
         selected.push({ idx, text: entry });
@@ -1771,7 +2003,49 @@ class GeminiScannerService {
     }, maxLines, maxSuggestions);
   }
 
-  static parseGeminiResponse(rawText, maxLines = Infinity, maxSuggestions = 25) {
+  static filterSuggestionsByScope(parsed, scope = null, maxLines = Infinity) {
+    if (!parsed || !Array.isArray(parsed.suggestions)) return parsed;
+    const normScope = normalizeScanScope(scope, maxLines);
+    if (!normScope) return parsed;
+
+    const minAllowed = normScope.startLine - 1;
+    const maxAllowed = normScope.endLine + 1;
+    const kept = [];
+    let filteredOutCount = 0;
+
+    for (const s of parsed.suggestions) {
+      if (!s) continue;
+      if (s.line >= minAllowed && s.line <= maxAllowed) {
+        kept.push({
+          ...s,
+          line: Math.max(normScope.startLine, Math.min(normScope.endLine, s.line))
+        });
+      } else {
+        filteredOutCount++;
+      }
+    }
+
+    if (kept.length === 0) {
+      throw new Error(
+        `All ${parsed.suggestions.length} AI suggestion(s) fell outside your scan scope (Lines ${normScope.startLine}–${normScope.endLine}). Ensure AI uses [L${normScope.startLine}]–[L${normScope.endLine}] line numbers.`
+      );
+    }
+
+    kept.sort((a, b) => a.line - b.line);
+    return {
+      ...parsed,
+      suggestions: kept,
+      scope: normScope,
+      filteredOutCount
+    };
+  }
+
+  static parseGeminiResponse(rawText, maxLines = Infinity, maxSuggestions = 25, scope = null) {
+    const baseResult = GeminiScannerService._parseUnscopedResponse(rawText, maxLines, maxSuggestions);
+    return GeminiScannerService.filterSuggestionsByScope(baseResult, scope, maxLines);
+  }
+
+  static _parseUnscopedResponse(rawText, maxLines = Infinity, maxSuggestions = 25) {
     if (!rawText || !rawText.trim()) {
       throw new Error("Clipboard or input is empty. Copy Gemini's response and try again.");
     }
@@ -1878,16 +2152,22 @@ class GeminiScannerService {
     return GeminiScannerService.parseGeminiResponse(rawText, Infinity, maxSuggestions);
   }
 
-  static buildAltGPrompt(noteTitle, noteContent, targetCount = 25) {
-    const allLines = noteContent.split(/\r?\n/);
-    const totalLines = allLines.length;
-
-    let totalImagesFound = 0;
-    allLines.forEach((l) => {
-      totalImagesFound += (l.match(/!\[\[.*?\]\]|!\[.*?\]\(.*?\)/g) || []).length;
-    });
-
-    const fullNumberedText = allLines.map((l, i) => `[L${i + 1}] ${l}`).join("\n");
+  static buildAltGPrompt(noteTitle, noteContent, targetCount = 25, scope = null) {
+    const prepared = prepareScopedLines(noteContent, scope);
+    const { totalLines, startLine, endLine, scopedLines, totalImagesFound, scope: normScope } = prepared;
+    const fullNumberedText = scopedLines.map((l, i) => `[L${startLine + i}] ${l}`).join("\n");
+    const taskScopeText = normScope
+      ? `Read ONLY the SELECTED SECTION below (Lines ${normScope.startLine}–${normScope.endLine} of "${noteTitle}"${normScope.parentHeading ? ` under "${normScope.parentHeading}"` : ""}).`
+      : `Read the ENTIRE, UNABRIDGED medical note below from top to bottom.`;
+    const scopeRulesBlock = normScope
+      ? `- SCAN SCOPE LOCKED (PARTIAL NOTE): Analyze ONLY lines [L${normScope.startLine}] through [L${normScope.endLine}] (${normScope.label}). Every returned "line" MUST be an integer between ${normScope.startLine} and ${normScope.endLine}. Do NOT output suggestions outside this range.`
+      : `- Scan the ENTIRE note thoroughly. Do NOT skip any section.`;
+    const excerptBanner = normScope
+      ? `━━ SELECTED PARTIAL NOTE EXCERPT (${normScope.label}: Lines ${startLine}–${endLine} of ${totalLines}, preserving original line numbers) ━━`
+      : `━━ COMPLETE UNABRIDGED NOTE (all lines with original line numbers) ━━`;
+    const lineMeta = normScope
+      ? `Total Lines: ${scopedLines.length} selected (Lines ${startLine}–${endLine} of ${totalLines} total)${normScope.parentHeading ? `\nParent Section Context: "${normScope.parentHeading}"` : ""}`
+      : `Total Lines: ${totalLines}`;
 
     return `You are an expert MBBS medical educator with deep knowledge of:
 - Clinical Surgery (Bailey & Love, SRB, Schwartz)
@@ -1899,7 +2179,7 @@ class GeminiScannerService {
 - Pharmacology (drug mechanism diagrams)
 - Embryology (Moore, Langman — developmental diagrams)
 
-Your task: Read the ENTIRE, UNABRIDGED medical note below from top to bottom.
+Your task: ${taskScopeText}
 Identify every significant location where a medical student needs a visual image for exam/viva retention.
 
 ━━ VISUAL CATEGORIES ━━
@@ -1911,7 +2191,7 @@ Identify every significant location where a medical student needs a visual image
 6. EMBRYOLOGY/PHYSIOLOGY: Developmental rotations, descent, physiological curves, action potentials, hormonal feedback
 
 ━━ STRICT RULES ━━
-- Scan the ENTIRE note thoroughly. Do NOT skip any section.
+${scopeRulesBlock}
 - Use the [L<number>] prefix to report the EXACT line number where each visual opportunity exists.
 - CRITICAL: Keep recommendedQuery SIMPLE, CLEAN, and CONCISE (strictly 3 to 5 clear keywords, e.g. 'Whipple procedure labeled diagram', 'Double bubble sign X-ray', 'Passaro triangle diagram', 'Grey Turner Cullen sign', 'Pancreas blood supply diagram'). Avoid long, convoluted 8-12 word queries that clutter image search engines.
 - Recommend clean, simple textbook illustrations, anatomical diagrams, and pathognomonic clinical/radiological spotters rather than overly dense, obscure micro-cellular schematics (optimized for DuckDuckGo image search).
@@ -1926,7 +2206,7 @@ Output valid JSON (or a clearly formatted markdown list) with your visual recomm
   "suggestions": [
     {
       "heading": "Section heading from note",
-      "line": 42,
+      "line": ${startLine},
       "visualConcept": "Specific image title",
       "visualType": "diagram",
       "rationale": "Why this visual is high-yield for MBBS exams (2 sentences)",
@@ -1937,7 +2217,7 @@ Output valid JSON (or a clearly formatted markdown list) with your visual recomm
 \`\`\`
 If you output a markdown list instead of JSON, format each item like this:
 1. **Heading**: [Section Name]
-   - **Line**: [L42]
+   - **Line**: [L${startLine}]
    - **Concept**: [Image Title]
    - **Type**: [diagram|radiology|histology|clinical|criteria|embryology]
    - **Rationale**: [Educational explanation]
@@ -1946,41 +2226,40 @@ If you output a markdown list instead of JSON, format each item like this:
 Select the ${targetCount} most high-yield concepts for MBBS/NEET-PG exams, and output all suggestions strictly in ascending order of line number [L<number>].
 
 Note Title: "${noteTitle}"
-Total Lines: ${totalLines}
+${lineMeta}
 Existing Images: ${totalImagesFound}
 
-━━ COMPLETE UNABRIDGED NOTE (all lines with original line numbers) ━━
+${excerptBanner}
 ${fullNumberedText}`;
   }
 
-  async scanNote(noteTitle, noteContent, maxSuggestions = 20, onProgress = null) {
+  async scanNote(noteTitle, noteContent, maxSuggestions = 20, onProgress = null, scope = null) {
     if (!this.apiKey) {
       throw new Error(
         "Gemini API key is missing. Please enter your API key in Settings → Medical Image Finder → Gemini API."
       );
     }
 
-    let submittedContent = noteContent;
+    const prepared = prepareScopedLines(noteContent, scope);
+    const { totalLines, startLine, endLine, scopedLines, totalImagesFound, scope: normScope } = prepared;
+
+    let numberedLines = scopedLines.map((l, i) => `[L${startLine + i}] ${l}`);
+    let fullNumberedText = numberedLines.join("\n");
     let truncationNote = "";
-    if (submittedContent.length > 60000) {
-      submittedContent = submittedContent.slice(0, 60000);
+    if (fullNumberedText.length > 60000) {
+      fullNumberedText = fullNumberedText.slice(0, 60000);
       truncationNote = " (scanned first 60,000 characters)";
     }
 
-    const allLines = submittedContent.split(/\r?\n/);
-    const totalLines = allLines.length;
+    if (onProgress) {
+      onProgress(`Uploading & analyzing ${normScope ? normScope.label : "note"} (${fullNumberedText.length.toLocaleString()} chars, ${scopedLines.length} lines)...`);
+    }
 
-    let totalImagesFound = 0;
-    allLines.forEach((l) => {
-      totalImagesFound += (l.match(/!\[\[.*?\]\]|!\[.*?\]\(.*?\)/g) || []).length;
-    });
-
-    if (onProgress) onProgress("Uploading & analyzing note (" + submittedContent.length.toLocaleString() + " chars, " + totalLines + " lines)...");
-
-    const fullNumberedText = allLines.map((l, i) => `[L${i + 1}] ${l}`).join("\n");
-
-    const systemPrompt = `You are an expert MBBS medical educator. Find visual opportunities across note. Line prefix is [L<number>]. CRITICAL: Keep recommendedQuery SIMPLE, CLEAN, and CONCISE (strictly 3 to 5 clear keywords, e.g. 'Whipple procedure labeled diagram', 'Double bubble sign X-ray', 'Passaro triangle diagram', 'Grey Turner Cullen sign', 'Pancreas blood supply diagram'). Recommend clean textbook illustrations and pathognomonic spotters. Output valid JSON with summary and suggestions array containing heading, line, visualConcept, visualType, rationale, recommendedQuery strictly ordered by ascending line number. Return at most ${maxSuggestions} highest-yield suggestions.`;
-    const userPrompt = `Note Title: "${noteTitle}"\nTotal Lines: ${totalLines}\nExisting Images: ${totalImagesFound}\n\n${fullNumberedText}`;
+    const scopeDirective = normScope
+      ? ` SCAN SCOPE: Analyze ONLY lines [L${normScope.startLine}] to [L${normScope.endLine}] (${normScope.label}). Every suggestion line MUST be between ${normScope.startLine} and ${normScope.endLine}.`
+      : "";
+    const systemPrompt = `You are an expert MBBS medical educator. Find visual opportunities across note.${scopeDirective} Line prefix is [L<number>]. CRITICAL: Keep recommendedQuery SIMPLE, CLEAN, and CONCISE (strictly 3 to 5 clear keywords, e.g. 'Whipple procedure labeled diagram', 'Double bubble sign X-ray', 'Passaro triangle diagram', 'Grey Turner Cullen sign', 'Pancreas blood supply diagram'). Recommend clean textbook illustrations and pathognomonic spotters. Output valid JSON with summary and suggestions array containing heading, line, visualConcept, visualType, rationale, recommendedQuery strictly ordered by ascending line number. Return at most ${maxSuggestions} highest-yield suggestions.`;
+    const userPrompt = `Note Title: "${noteTitle}"\nTotal Lines: ${normScope ? `${startLine}-${endLine} of ${totalLines}` : totalLines}\nExisting Images: ${totalImagesFound}\n\n${fullNumberedText}`;
 
     const modelsToTry = [
       this.model,
@@ -2092,6 +2371,7 @@ ${fullNumberedText}`;
     }
 
     const sanitized = GeminiScannerService.sanitizeSuggestions(parsedJson, totalLines, maxSuggestions);
+    const scopedResult = GeminiScannerService.filterSuggestionsByScope(sanitized, normScope, totalLines);
 
     if (successfulModel && successfulModel !== this.model && this.plugin && this.plugin.settings) {
       this.plugin.settings.geminiModel = successfulModel;
@@ -2099,9 +2379,11 @@ ${fullNumberedText}`;
     }
 
     return {
-      summary: (sanitized.summary || `Scanned note (${totalLines} lines) with Gemini.`) + truncationNote,
+      summary: (scopedResult.summary || `Scanned note (${totalLines} lines) with Gemini.`) + truncationNote,
       existingImages: totalImagesFound,
-      suggestions: sanitized.suggestions
+      suggestions: scopedResult.suggestions,
+      scope: scopedResult.scope || normScope,
+      filteredOutCount: scopedResult.filteredOutCount || 0
     };
   }
 }
@@ -2121,8 +2403,11 @@ class GeminiResponseImportModal extends Modal {
 
     this.titleEl.setText("📥 Import Gemini Response");
 
+    const activeScope = typeof this.view?.getImportScope === "function" ? this.view.getImportScope() : null;
     contentEl.createEl("p", {
-      text: "Paste the response from your local Gemini app (Alt+G) below, or click '📋 Paste from Clipboard'. Accepts both JSON and Markdown formats.",
+      text: activeScope
+        ? `Paste Gemini's response for ${activeScope.label} (Lines ${activeScope.startLine}–${activeScope.endLine}). Out-of-scope lines will be filtered automatically.`
+        : "Paste the response from your local Gemini app (Alt+G) below, or click '📋 Paste from Clipboard'. Accepts both JSON and Markdown formats.",
       cls: "mif-scan-hero-desc"
     });
 
@@ -2183,10 +2468,15 @@ class GeminiResponseImportModal extends Modal {
       try {
         const lineCount = this.view.scanContext?.editor?.lineCount() || Infinity;
         const targetCount = this.plugin.settings.geminiMaxSuggestions || 25;
-        const parsed = GeminiScannerService.parseGeminiResponse(raw, lineCount, targetCount);
+        const importScope = typeof this.view?.getImportScope === "function" ? this.view.getImportScope() : null;
+        const parsed = GeminiScannerService.parseGeminiResponse(raw, lineCount, targetCount, importScope);
         this.view.applyScanResults(parsed, raw);
         this.close();
-        new Notice(`Imported ${parsed.suggestions.length} visual suggestions!`);
+        if (parsed.filteredOutCount > 0) {
+          new Notice(`Imported ${parsed.suggestions.length} visual suggestions (filtered ${parsed.filteredOutCount} outside scope).`, 6000);
+        } else {
+          new Notice(`Imported ${parsed.suggestions.length} visual suggestions!`);
+        }
       } catch (err) {
         new Notice(`Import failed: ${safeError(err)}`);
       }
@@ -2206,53 +2496,126 @@ class GeminiResponseImportModal extends Modal {
 
 
 class ImagePreviewModal extends Modal {
-  constructor(app, plugin, item, view = null) {
+  constructor(app, plugin, item, view = null, previewContext = null) {
     super(app);
     this.plugin = plugin;
     this.item = item;
     this.view = view;
+    this.previewContext = previewContext;
+    this.currentIndex = (previewContext && Number.isInteger(previewContext.currentIndex)) ? previewContext.currentIndex : 0;
+    this.isZoomed = false;
+    this._keydownHandler = null;
   }
 
   onOpen() {
+    if (this.modalEl && typeof this.modalEl.addClass === "function") {
+      this.modalEl.addClass("mif-preview-modal-window");
+    }
+    this.renderPreview();
+
+    if (typeof document !== "undefined" && document.addEventListener) {
+      this._keydownHandler = (e) => {
+        if (!e) return;
+        const items = this.previewContext?.items;
+        if (e.key === "ArrowLeft" && Array.isArray(items) && items.length > 1 && this.currentIndex > 0) {
+          e.preventDefault();
+          this.navigateBy(-1);
+        } else if (e.key === "ArrowRight" && Array.isArray(items) && items.length > 1 && this.currentIndex < items.length - 1) {
+          e.preventDefault();
+          this.navigateBy(1);
+        } else if ((e.key === "z" || e.key === "Z") && !e.ctrlKey && !e.metaKey && !e.altKey) {
+          e.preventDefault();
+          this.toggleZoom();
+        } else if (e.key === " " && typeof this.previewContext?.onBatchToggle === "function") {
+          e.preventDefault();
+          this.previewContext.onBatchToggle(this.currentIndex);
+          this.renderPreview();
+        }
+      };
+      document.addEventListener("keydown", this._keydownHandler);
+    }
+  }
+
+  navigateBy(delta) {
+    const items = this.previewContext?.items;
+    if (!Array.isArray(items) || items.length === 0) return;
+    const nextIdx = Math.max(0, Math.min(items.length - 1, this.currentIndex + delta));
+    if (nextIdx === this.currentIndex) return;
+    this.currentIndex = nextIdx;
+    this.item = items[nextIdx];
+    this.isZoomed = false;
+    this.renderPreview();
+  }
+
+  toggleZoom() {
+    this.isZoomed = !this.isZoomed;
+    const imgContainer = this.contentEl.querySelector(".mif-modal-img-container");
+    const img = this.contentEl.querySelector(".mif-modal-img");
+    const zoomBtn = this.contentEl.querySelector(".mif-preview-zoom-btn");
+    if (imgContainer) {
+      if (this.isZoomed) imgContainer.addClass("is-zoomed");
+      else imgContainer.removeClass("is-zoomed");
+    }
+    if (img) {
+      if (this.isZoomed) img.addClass("is-zoomed");
+      else img.removeClass("is-zoomed");
+    }
+    if (zoomBtn) {
+      zoomBtn.setText(this.isZoomed ? "🔍 Fit screen" : "🔍 2× Zoom");
+    }
+  }
+
+  renderPreview() {
     const { contentEl } = this;
     contentEl.empty();
     contentEl.addClass("mif-preview-modal");
 
-    this.titleEl.setText(this.item.title);
+    this.titleEl.setText(this.item.title || "Image Preview");
+
+    const items = Array.isArray(this.previewContext?.items) ? this.previewContext.items : null;
+    if (items && items.length > 1) {
+      const navBar = contentEl.createDiv({ cls: "mif-preview-nav-bar" });
+      const prevBtn = navBar.createEl("button", { text: "← Prev", cls: "mif-btn mif-preview-nav-btn" });
+      prevBtn.disabled = this.currentIndex <= 0;
+      prevBtn.onclick = () => this.navigateBy(-1);
+
+      navBar.createSpan({
+        text: `Image ${this.currentIndex + 1} of ${items.length}`,
+        cls: "mif-preview-nav-counter"
+      });
+
+      const nextBtn = navBar.createEl("button", { text: "Next →", cls: "mif-btn mif-preview-nav-btn" });
+      nextBtn.disabled = this.currentIndex >= items.length - 1;
+      nextBtn.onclick = () => this.navigateBy(1);
+    }
 
     const imgContainer = contentEl.createDiv({
-      cls: "mif-modal-img-container"
+      cls: `mif-modal-img-container ${this.isZoomed ? "is-zoomed" : ""}`
     });
     const img = imgContainer.createEl("img", {
-      cls: "mif-modal-img",
+      cls: `mif-modal-img ${this.isZoomed ? "is-zoomed" : ""}`,
       attr: {
         src: this.item.imageUrl || this.item.thumbnailUrl,
-        alt: this.item.title
+        alt: this.item.title || "Medical image"
       }
     });
-    img.title = `${this.item.title}\nDouble-click to open website in browser`;
+    img.title = `${this.item.title || ""}\nDouble-click to toggle 2× zoom • Use ←/→ keys to browse`;
 
-    const handleDblClick = (e) => {
+    const handleZoomToggle = (e) => {
       e?.preventDefault?.();
       e?.stopPropagation?.();
-      const targetUrl = this.item.sourceUrl || this.item.imageUrl;
-      if (openExternalUrl(targetUrl)) {
-        new Notice(`🌐 Opening source in browser: ${this.item.domain || "Web"}`);
-      }
+      this.toggleZoom();
     };
-    img.ondblclick = handleDblClick;
-    imgContainer.ondblclick = handleDblClick;
-
-    // Fallback if main image fails
-    bindImageFallback(img, this.item.thumbnailUrl);
+    img.ondblclick = handleZoomToggle;
+    imgContainer.ondblclick = handleZoomToggle;
 
     const details = contentEl.createDiv({ cls: "mif-card-meta" });
-    if (this.item.width && this.item.height) {
-      details.createSpan({
-        text: `${this.item.width} × ${this.item.height} px`,
-        cls: "mif-badge"
-      });
-    }
+    const dimBadge = details.createSpan({
+      text: (this.item.width && this.item.height) ? `${this.item.width} × ${this.item.height} px` : "",
+      cls: "mif-badge"
+    });
+    bindHighResPreview(img, dimBadge, this.item, { fullLabel: true });
+
     if (this.item.domain) {
       details.createSpan({
         text: `Source: ${this.item.domain}`,
@@ -2261,6 +2624,24 @@ class ImagePreviewModal extends Modal {
     }
 
     const actions = contentEl.createDiv({ cls: "mif-modal-actions" });
+
+    const zoomBtn = actions.createEl("button", {
+      text: this.isZoomed ? "🔍 Fit screen" : "🔍 2× Zoom",
+      cls: "mif-btn mif-preview-zoom-btn"
+    });
+    zoomBtn.onclick = () => this.toggleZoom();
+
+    if (typeof this.previewContext?.onBatchToggle === "function") {
+      const isSelected = Boolean(this.previewContext.isIndexSelected?.(this.currentIndex));
+      const batchToggleBtn = actions.createEl("button", {
+        text: isSelected ? "✓ Included in Batch" : "+ Select for Batch",
+        cls: `mif-btn ${isSelected ? "mif-btn-copy" : ""}`
+      });
+      batchToggleBtn.onclick = () => {
+        this.previewContext.onBatchToggle(this.currentIndex);
+        this.renderPreview();
+      };
+    }
 
     const copyBtn = actions.createEl("button", {
       text: "📋 Copy image to clipboard",
@@ -2332,6 +2713,10 @@ class ImagePreviewModal extends Modal {
   }
 
   onClose() {
+    if (this._keydownHandler && typeof document !== "undefined" && document.removeEventListener) {
+      document.removeEventListener("keydown", this._keydownHandler);
+      this._keydownHandler = null;
+    }
     this.contentEl.empty();
   }
 }
@@ -2344,8 +2729,12 @@ class BatchImageReviewModal extends Modal {
     this.view = view;
     this.suggestions = (view.scanResults?.suggestions || []).map((s, idx) => ({ ...s, _idx: idx }));
     this.scanContext = view.scanContext;
+    this.scanScope = view.scanResults?.scope || null;
     this.reviewItems = [];
-    this.currentProviderId = this.plugin.settings.defaultProvider || "duckduckgo";
+    this.currentProviderId = this.plugin.settings?.defaultProvider || "duckduckgo";
+    this.previewSize = ["sm", "md", "lg", "xl"].includes(this.plugin.settings?.batchPreviewSize)
+      ? this.plugin.settings.batchPreviewSize
+      : "lg";
     this.isInserting = false;
     this.isFetchingAll = false;
     this.fetchGeneration = 0;
@@ -2363,6 +2752,50 @@ class BatchImageReviewModal extends Modal {
       case "duckduckgo":
       default: return "DuckDuckGo";
     }
+  }
+
+  applyPreviewSizeClass() {
+    if (!this.contentEl) return;
+    for (const preset of BATCH_SIZE_PRESETS) {
+      if (typeof this.contentEl.removeClass === "function") this.contentEl.removeClass(`is-size-${preset.id}`);
+    }
+    if (typeof this.contentEl.addClass === "function") this.contentEl.addClass(`is-size-${this.previewSize}`);
+  }
+
+  toggleCandidateSelection(r, cIdx) {
+    r.insertError = null;
+    if (!Array.isArray(r.selectedIndices)) {
+      r.selectedIndices = (r.selectedIdx != null && r.included) ? [r.selectedIdx] : [];
+    }
+    const idxInSelected = r.selectedIndices.indexOf(cIdx);
+    if (idxInSelected >= 0) {
+      r.selectedIndices.splice(idxInSelected, 1);
+    } else {
+      r.selectedIndices.push(cIdx);
+      r.selectedIndices.sort((a, b) => a - b);
+    }
+    r.selectedIdx = r.selectedIndices.length > 0 ? r.selectedIndices[0] : 0;
+    r.included = r.selectedIndices.length > 0;
+  }
+
+  syncCardSelectionUI(card, r, cb, badge) {
+    const s = r.suggestion;
+    if (cb) cb.checked = r.included;
+    const thumbs = card.querySelectorAll(".mif-batch-thumb-option");
+    thumbs.forEach((optEl, cIdx) => {
+      const isSelected = r.included && Array.isArray(r.selectedIndices) && r.selectedIndices.includes(cIdx);
+      if (isSelected) optEl.addClass("is-selected");
+      else optEl.removeClass("is-selected");
+      const lbl = optEl.querySelector(".mif-batch-choice-label");
+      if (lbl) lbl.setText(isSelected ? `✓ #${cIdx + 1}` : `#${cIdx + 1}`);
+    });
+    if (badge) {
+      const selCount = (r.included && Array.isArray(r.selectedIndices)) ? r.selectedIndices.length : 0;
+      const countText = r.items.length > 0 ? ` • ${r.items.length} options` : "";
+      const selText = selCount > 1 ? ` (${selCount} selected)` : "";
+      badge.setText(`${s.visualType || "diagram"}${countText}${selText}`);
+    }
+    this.updateFooter();
   }
 
   updateFooter() {
@@ -2388,6 +2821,7 @@ class BatchImageReviewModal extends Modal {
     const { contentEl } = this;
     contentEl.empty();
     contentEl.addClass("mif-batch-modal");
+    this.applyPreviewSizeClass();
     if (this.modalEl) this.modalEl.addClass("mif-batch-modal-window");
 
     this.titleEl.setText("⚡ Fast Batch Image Review & Integration");
@@ -2399,14 +2833,15 @@ class BatchImageReviewModal extends Modal {
 
     // Header info & Provider Selector Toolbar
     const topBar = contentEl.createDiv({ cls: "mif-batch-top-bar" });
+    const scopeHint = this.scanScope ? ` [Scoped: ${this.scanScope.label}]` : "";
     const desc = topBar.createEl("p", {
-      text: `Review visual matches for all ${this.suggestions.length} suggestions. Choice #1 is pre-selected; scroll horizontally to select 1 or more images per topic for batch integration.`,
+      text: `Review visual matches for all ${this.suggestions.length} suggestions${scopeHint}. Click to select 1 or more • Double-click or click 🔍 for large preview.`,
       cls: "mif-scan-hero-desc"
     });
     desc.style.margin = "0 0 6px 0";
 
     const toolbar = topBar.createDiv({ cls: "mif-batch-toolbar" });
-    toolbar.createSpan({ cls: "mif-batch-toolbar-label", text: "🔍 Search Engine:" });
+    toolbar.createSpan({ cls: "mif-batch-toolbar-label", text: "🔍 Engine:" });
 
     const providerSelect = toolbar.createEl("select", { cls: "mif-batch-provider-select" });
     const providerOptions = [
@@ -2427,6 +2862,34 @@ class BatchImageReviewModal extends Modal {
       text: "🔄 Re-search All with Engine"
     });
 
+    // Thumbnail Size Switcher (S / M / L / XL)
+    const sizeGroup = toolbar.createDiv({ cls: "mif-batch-size-group" });
+    sizeGroup.createSpan({ cls: "mif-batch-toolbar-label", text: "🖼️ Size:" });
+    const sizeBtns = new Map();
+    for (const preset of BATCH_SIZE_PRESETS) {
+      const sBtn = sizeGroup.createEl("button", {
+        cls: `mif-batch-size-btn ${this.previewSize === preset.id ? "is-active" : ""}`,
+        text: preset.label
+      });
+      sBtn.title = preset.title;
+      sBtn.onclick = async () => {
+        if (this.previewSize === preset.id) return;
+        this.previewSize = preset.id;
+        this.applyPreviewSizeClass();
+        for (const [id, bEl] of sizeBtns.entries()) {
+          if (id === preset.id) bEl.addClass("is-active");
+          else bEl.removeClass("is-active");
+        }
+        if (this.plugin.settings) {
+          this.plugin.settings.batchPreviewSize = preset.id;
+          if (typeof this.plugin.saveSettings === "function") {
+            await this.plugin.saveSettings({ clearCache: false });
+          }
+        }
+      };
+      sizeBtns.set(preset.id, sBtn);
+    }
+
     providerSelect.onchange = () => {
       this.currentProviderId = providerSelect.value;
       new Notice(`Switched engine to ${this.getProviderDisplayName(this.currentProviderId)}`);
@@ -2436,9 +2899,12 @@ class BatchImageReviewModal extends Modal {
       this.fetchAllCandidates(progressBar, progressLabel, progressContainer, true);
     };
 
-    // Progress Bar
+    // Progress Bar (always starts cleanly at 0 / N)
     const progressContainer = contentEl.createDiv({ cls: "mif-batch-progress-box" });
-    const progressLabel = progressContainer.createDiv({ cls: "mif-batch-progress-label", text: "🔍 Searching images..." });
+    const progressLabel = progressContainer.createDiv({
+      cls: "mif-batch-progress-label",
+      text: `🔍 Fetching images via ${this.getProviderDisplayName(this.currentProviderId)}... (0/${this.suggestions.length})`
+    });
     const progressBar = progressContainer.createEl("progress", { cls: "mif-batch-progress-bar" });
     progressBar.max = this.suggestions.length;
     progressBar.value = 0;
@@ -2506,6 +2972,7 @@ class BatchImageReviewModal extends Modal {
             targetHeading: r.suggestion.heading,
             targetConcept: r.suggestion.visualConcept,
             targetQuery: r.suggestion.recommendedQuery,
+            targetScope: this.scanScope,
             imageItem: {
               ...item,
               targetContext: this.scanContext,
@@ -2513,6 +2980,7 @@ class BatchImageReviewModal extends Modal {
               targetHeading: r.suggestion.heading,
               targetConcept: r.suggestion.visualConcept,
               targetQuery: r.suggestion.recommendedQuery,
+              targetScope: this.scanScope,
               searchOriginSuggestionIndex: r.suggestion._idx
             }
           });
@@ -2523,6 +2991,7 @@ class BatchImageReviewModal extends Modal {
         progressContainer.style.display = "block";
         progressBar.max = jobs.length;
         progressBar.value = 0;
+        progressLabel.setText(`Inserting into note... (0/${jobs.length})`);
         const result = await this.plugin.batchInsertImages(jobs, (cur, total) => {
           progressBar.value = cur;
           progressLabel.setText(`Inserting into note... (${cur}/${total})`);
@@ -2632,12 +3101,14 @@ class BatchImageReviewModal extends Modal {
         progressBar.max = this.reviewItems.length;
         progressBar.value = 0;
       }
+      if (progressLabel) {
+        progressLabel.setText(`Fetching images via ${this.getProviderDisplayName(this.currentProviderId)}... (0/${this.reviewItems.length})`);
+      }
 
       const isDdg = this.currentProviderId === "duckduckgo";
       const concurrency = isDdg ? 1 : Math.min(3, this.reviewItems.length);
       const delayMs = isDdg ? 650 : 120;
       let nextIdx = 0;
-      let started = 0;
       let completed = 0;
 
       const worker = async () => {
@@ -2645,16 +3116,12 @@ class BatchImageReviewModal extends Modal {
           const i = nextIdx++;
           if (i >= this.reviewItems.length) break;
           const item = this.reviewItems[i];
-          started++;
           item.loading = true;
           item.loadingProviderId = this.currentProviderId;
           item.error = null;
           item.insertError = null;
           this.updateCard(item);
 
-          if (progressLabel) {
-            progressLabel.setText(`Fetching images via ${this.getProviderDisplayName(this.currentProviderId)}... (${started}/${this.reviewItems.length})`);
-          }
           const meta = await this.fetchSingleItem(item, null, bypassCache);
           if (this.isClosed || gen !== this.fetchGeneration) break;
           if (meta && meta.stale) continue;
@@ -2662,6 +3129,9 @@ class BatchImageReviewModal extends Modal {
           completed++;
           this.updateCard(item);
           if (progressBar) progressBar.value = completed;
+          if (progressLabel) {
+            progressLabel.setText(`Fetching images via ${this.getProviderDisplayName(this.currentProviderId)}... (${completed}/${this.reviewItems.length})`);
+          }
 
           const skipDelay = meta && meta.cached === true;
           if (!skipDelay && nextIdx < this.reviewItems.length && !this.isClosed && gen === this.fetchGeneration) {
@@ -2792,66 +3262,96 @@ class BatchImageReviewModal extends Modal {
           decoding: "async"
         }
       });
-      img.src = item.thumbnailUrl || item.imageUrl;
       img.alt = item.title;
-      bindImageFallback(img, item.imageUrl);
-      optEl.title = `${item.title} (${item.domain || "Web"})\nClick to select/unselect • Double-click to open website in browser`;
+      optEl.title = `${item.title} (${item.domain || "Web"})\nClick to select/unselect • Double-click or click 🔍 for large preview`;
 
       optEl.createSpan({
         cls: "mif-batch-choice-label",
         text: isSelected ? `✓ #${cIdx + 1}` : `#${cIdx + 1}`
       });
 
-      if (item.width && item.height) {
-        optEl.createDiv({
-          cls: "mif-thumb-overlay",
-          text: `${item.width}×${item.height}`
-        });
-      }
+      const buildPreviewContext = () => ({
+        items: r.items.map(cand => ({
+          ...cand,
+          targetContext: this.scanContext,
+          targetLine: s.line,
+          targetHeading: s.heading,
+          targetConcept: s.visualConcept,
+          targetQuery: s.recommendedQuery,
+          targetScope: this.scanScope,
+          searchOriginSuggestionIndex: s._idx
+        })),
+        currentIndex: cIdx,
+        isIndexSelected: (candIdx) => r.included && Array.isArray(r.selectedIndices) && r.selectedIndices.includes(candIdx),
+        onBatchToggle: (candIdx) => {
+          this.toggleCandidateSelection(r, candIdx);
+          this.syncCardSelectionUI(card, r, cb, badge);
+        }
+      });
 
-      // Single-click: toggle selection for this image (1 or more per query)
-      optEl.onclick = (e) => {
-        e.stopPropagation();
-        if (e.detail > 1) return;
-        r.insertError = null;
-        if (!Array.isArray(r.selectedIndices)) {
-          r.selectedIndices = (r.selectedIdx != null && r.included) ? [r.selectedIdx] : [];
-        }
-        const idxInSelected = r.selectedIndices.indexOf(cIdx);
-        if (idxInSelected >= 0) {
-          r.selectedIndices.splice(idxInSelected, 1);
-          optEl.removeClass("is-selected");
-          const lbl = optEl.querySelector(".mif-batch-choice-label");
-          if (lbl) lbl.setText(`#${cIdx + 1}`);
-        } else {
-          r.selectedIndices.push(cIdx);
-          r.selectedIndices.sort((a, b) => a - b);
-          optEl.addClass("is-selected");
-          const lbl = optEl.querySelector(".mif-batch-choice-label");
-          if (lbl) lbl.setText(`✓ #${cIdx + 1}`);
-        }
-
-        r.selectedIdx = r.selectedIndices.length > 0 ? r.selectedIndices[0] : 0;
-        if (r.selectedIndices.length > 0) {
-          r.included = true;
-          cb.checked = true;
-        } else {
-          r.included = false;
-          cb.checked = false;
-        }
-        const updatedSel = r.included ? r.selectedIndices.length : 0;
-        badge.setText(`${s.visualType || "diagram"} • ${r.items.length} options${updatedSel > 1 ? ` (${updatedSel} selected)` : ""}`);
-        this.updateFooter();
+      const openBigPreview = () => {
+        const previewItems = buildPreviewContext();
+        const previewItem = previewItems.items[cIdx] || {
+          ...item,
+          targetContext: this.scanContext,
+          targetLine: s.line,
+          targetHeading: s.heading,
+          targetConcept: s.visualConcept,
+          targetQuery: s.recommendedQuery,
+          targetScope: this.scanScope,
+          searchOriginSuggestionIndex: s._idx
+        };
+        new ImagePreviewModal(this.app, this.plugin, previewItem, this.view, previewItems).open();
       };
 
-      // Double-click: open source website in browser
+      const zoomIconBtn = optEl.createEl("button", {
+        cls: "mif-batch-zoom-btn",
+        text: "🔍"
+      });
+      zoomIconBtn.title = "Open large in-app preview";
+      zoomIconBtn.onclick = (e) => {
+        e?.preventDefault?.();
+        e?.stopPropagation?.();
+        openBigPreview();
+      };
+      zoomIconBtn.ondblclick = (e) => {
+        e?.preventDefault?.();
+        e?.stopPropagation?.();
+      };
+
+      const overlay = optEl.createDiv({
+        cls: "mif-thumb-overlay",
+        text: (item.width && item.height) ? `${item.width}×${item.height}` : ""
+      });
+      bindHighResPreview(img, overlay, item);
+
+      // Single-click: immediate selection toggle (1 or more per query)
+      optEl.onclick = (e) => {
+        e?.stopPropagation?.();
+        if (e && e.detail > 1) return;
+        r._preClickState = {
+          included: r.included,
+          selectedIndices: Array.isArray(r.selectedIndices) ? [...r.selectedIndices] : [],
+          selectedIdx: r.selectedIdx,
+          targetIdx: cIdx,
+          at: Date.now()
+        };
+        this.toggleCandidateSelection(r, cIdx);
+        this.syncCardSelectionUI(card, r, cb, badge);
+      };
+
+      // Double-click: restore pre-click state (accidental toggle prevention) and open big in-app preview
       optEl.ondblclick = (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        const targetUrl = item.sourceUrl || item.imageUrl;
-        if (openExternalUrl(targetUrl)) {
-          new Notice(`🌐 Opening source in browser: ${item.domain || "Web"}`);
+        e?.preventDefault?.();
+        e?.stopPropagation?.();
+        if (r._preClickState && r._preClickState.targetIdx === cIdx && (Date.now() - r._preClickState.at) < 500) {
+          r.included = r._preClickState.included;
+          r.selectedIndices = [...r._preClickState.selectedIndices];
+          r.selectedIdx = r._preClickState.selectedIdx;
+          r._preClickState = null;
+          this.syncCardSelectionUI(card, r, cb, badge);
         }
+        openBigPreview();
       };
     });
 
@@ -2959,6 +3459,15 @@ class MedicalImageFinderView extends ItemView {
     this.searchTargetHeading = null;
     this.searchTargetConcept = null;
     this.searchTargetQuery = null;
+    this.searchTargetScope = null;
+    this.scopeMode = "full";
+    this.selectedSectionKey = "";
+    this.customScopeStart = 1;
+    this.customScopeEnd = 1;
+    this.editorSelectionScope = null;
+    this.pendingScanScope = null;
+    this._lastAutoSelectionKey = "";
+    this.scannerCategoryFilter = "all";
     this.lastActiveScannerIndex = null;
     this.pendingScannerScrollIdx = null;
     this.scannerScrollTop = 0;
@@ -2973,7 +3482,68 @@ class MedicalImageFinderView extends ItemView {
     this.searchTargetHeading = null;
     this.searchTargetConcept = null;
     this.searchTargetQuery = null;
+    this.searchTargetScope = null;
     this.searchOriginSuggestionIndex = null;
+  }
+
+  detectEditorSelectionScope(targetView = null) {
+    const view = targetView || this.plugin.getTargetView?.();
+    const editor = view?.editor;
+    if (!editor || typeof editor.getSelection !== "function" || typeof editor.getCursor !== "function") return null;
+    const rawSel = editor.getSelection();
+    if (!rawSel || !rawSel.trim()) return null;
+    const from = editor.getCursor("from");
+    const to = editor.getCursor("to");
+    if (!from || !to) return null;
+    let startLine = (from.line || 0) + 1;
+    let endLine = (to.line || 0) + 1;
+    if (to.ch === 0 && endLine > startLine) endLine -= 1;
+    if (endLine < startLine) endLine = startLine;
+    return {
+      mode: "selection",
+      startLine,
+      endLine,
+      label: `Selection (L${startLine}–L${endLine})`,
+      key: `${view.file?.path || ""}:${startLine}:${endLine}:${rawSel.length}`,
+      isSignificant: rawSel.includes("\n") || endLine > startLine || rawSel.trim().length >= 25
+    };
+  }
+
+  getSelectedUiScope(targetView = null) {
+    const view = targetView || this.plugin.getTargetView?.();
+    const content = view?.editor ? view.editor.getValue() : "";
+    const totalLines = content ? content.split(/\r?\n/).length : Infinity;
+    if (this.scopeMode === "selection") {
+      const liveSel = this.detectEditorSelectionScope(view);
+      const src = liveSel || this.editorSelectionScope;
+      return src ? normalizeScanScope(src, totalLines) : null;
+    }
+    if (this.scopeMode === "section" && this.selectedSectionKey) {
+      const sections = extractNoteSections(content);
+      const match = sections.find(s => `${s.startLine}:${s.endLine}` === this.selectedSectionKey);
+      if (match) {
+        return normalizeScanScope({
+          mode: "section",
+          startLine: match.startLine,
+          endLine: match.endLine,
+          label: `Section: ${match.heading} (L${match.startLine}–L${match.endLine})`
+        }, totalLines);
+      }
+    }
+    if (this.scopeMode === "custom") {
+      return normalizeScanScope({
+        mode: "custom",
+        startLine: this.customScopeStart,
+        endLine: this.customScopeEnd,
+        label: `Lines ${this.customScopeStart}–${this.customScopeEnd}`
+      }, totalLines);
+    }
+    return null;
+  }
+
+  getImportScope() {
+    if (this.pendingScanScope) return this.pendingScanScope;
+    return this.getSelectedUiScope(this.scanContext?.view || this.plugin.getTargetView?.()) || null;
   }
 
   syncTargetContentAfterInsert(targetFile = null) {
@@ -3117,11 +3687,16 @@ class MedicalImageFinderView extends ItemView {
       if (!looksLikeResponse) return;
 
       const lineCount = this.scanContext?.editor?.lineCount() || Infinity;
-      const parsed = GeminiScannerService.parseGeminiResponse(clean, lineCount);
+      const targetCount = this.plugin.settings.geminiMaxSuggestions || 25;
+      const parsed = GeminiScannerService.parseGeminiResponse(clean, lineCount, targetCount, this.getImportScope());
       if (parsed && parsed.suggestions && parsed.suggestions.length > 0) {
         this.stopClipboardWatcher();
         this.applyScanResults(parsed);
-        new Notice(`Auto-detected Gemini response from clipboard! Rendered ${parsed.suggestions.length} visual cards.`, 6000);
+        if (parsed.filteredOutCount > 0) {
+          new Notice(`Auto-detected ${parsed.suggestions.length} cards (filtered ${parsed.filteredOutCount} outside scan scope).`, 6000);
+        } else {
+          new Notice(`Auto-detected Gemini response from clipboard! Rendered ${parsed.suggestions.length} visual cards.`, 6000);
+        }
       }
     } catch (_) {}
   }
@@ -3176,12 +3751,14 @@ class MedicalImageFinderView extends ItemView {
           lastWasCached = (Date.now() - t0) < 15;
           const norm = this.plugin.searchWithCache ? results : normalizeResults(results);
           if (norm.length > 0) {
+            const activeScope = this.scanResults?.scope || null;
             jobs.push({
               suggestionIndex: i,
               targetLine: s.line,
               targetHeading: s.heading,
               targetConcept: s.visualConcept,
               targetQuery: s.recommendedQuery,
+              targetScope: activeScope,
               imageItem: {
                 ...norm[0],
                 targetContext: this.scanContext,
@@ -3189,6 +3766,7 @@ class MedicalImageFinderView extends ItemView {
                 targetHeading: s.heading,
                 targetConcept: s.visualConcept,
                 targetQuery: s.recommendedQuery,
+                targetScope: activeScope,
                 searchOriginSuggestionIndex: i
               }
             });
@@ -3221,7 +3799,7 @@ class MedicalImageFinderView extends ItemView {
     }
   }
 
-  async copyNotePromptForAltG() {
+  async copyNotePromptForAltG(explicitScope = null) {
     let context;
     try {
       context = this.plugin.captureTarget();
@@ -3236,16 +3814,26 @@ class MedicalImageFinderView extends ItemView {
       return;
     }
 
+    const activeScope = explicitScope !== null
+      ? normalizeScanScope(explicitScope, content.split(/\r?\n/).length)
+      : this.getSelectedUiScope(context.view);
+
     this.scanContext = context;
-    this.copiedPromptNote = title;
+    this.pendingScanScope = activeScope;
+    this.copiedPromptNote = activeScope ? `${title} (${activeScope.label})` : title;
     this.waitingForGemini = true;
 
     const targetCount = this.plugin.settings.geminiMaxSuggestions || 25;
-    const promptText = GeminiScannerService.buildAltGPrompt(title, content, targetCount);
+    const promptText = GeminiScannerService.buildAltGPrompt(title, content, targetCount, activeScope);
     this.startClipboardWatcher(promptText);
     const copied = await copyToClipboard(promptText);
     if (copied) {
-      new Notice("Copied! Press Alt+G, paste (Ctrl+V), and press Enter in Gemini.", 8000);
+      new Notice(
+        activeScope
+          ? `Copied ${activeScope.label}! Press Alt+G, paste (Ctrl+V), and press Enter in Gemini.`
+          : "Copied! Press Alt+G, paste (Ctrl+V), and press Enter in Gemini.",
+        8000
+      );
     } else {
       new Notice("Failed to copy automatically to clipboard. Please check permissions.", 5000);
     }
@@ -3262,9 +3850,13 @@ class MedicalImageFinderView extends ItemView {
       }
       const lineCount = this.scanContext?.editor?.lineCount() || Infinity;
       const targetCount = this.plugin.settings.geminiMaxSuggestions || 25;
-      const parsed = GeminiScannerService.parseGeminiResponse(text, lineCount, targetCount);
+      const parsed = GeminiScannerService.parseGeminiResponse(text, lineCount, targetCount, this.getImportScope());
       await this.applyScanResults(parsed, text);
-      new Notice(`Imported ${parsed.suggestions.length} visual suggestions!`, 5000);
+      if (parsed.filteredOutCount > 0) {
+        new Notice(`Imported ${parsed.suggestions.length} visual suggestions (filtered ${parsed.filteredOutCount} outside scope).`, 6000);
+      } else {
+        new Notice(`Imported ${parsed.suggestions.length} visual suggestions!`, 5000);
+      }
     } catch (err) {
       new Notice(`Could not parse clipboard automatically: ${safeError(err)}. Opening paste window...`, 6000);
       new GeminiResponseImportModal(this.app, this.plugin, this).open();
@@ -3276,6 +3868,8 @@ class MedicalImageFinderView extends ItemView {
     this.restoredFromMemory = false;
     this.scanErrorMessage = "";
     this.waitingForGemini = false;
+    this.pendingScanScope = parsed?.scope || null;
+    this.scannerCategoryFilter = "all";
     this.stopClipboardWatcher();
     this.inlineQuickResults.clear();
     this.inlineLoading.clear();
@@ -3296,6 +3890,8 @@ class MedicalImageFinderView extends ItemView {
   async clearScanMemory() {
     this.scanResults = null;
     this.restoredFromMemory = false;
+    this.pendingScanScope = null;
+    this.scannerCategoryFilter = "all";
     this.plugin.settings.lastScanResults = null;
     this.plugin.settings.lastImportedGeminiResponse = "";
     this.plugin.settings.lastScannedNote = "";
@@ -3388,15 +3984,17 @@ class MedicalImageFinderView extends ItemView {
         scanner = new GeminiScannerService(this.plugin.settings.geminiApiKey, this.plugin.settings.geminiModel, this.plugin);
       }
       const max = this.plugin.settings.geminiMaxSuggestions || 25;
+      const scanScope = this.getSelectedUiScope(context.view);
       const results = await scanner.scanNote(title, content, max, (msg) => {
         if (!this.closed && generation === this.scanGeneration) {
           this.scanProgressMsg = msg;
           this.render();
         }
-      });
+      }, scanScope);
       if (this.closed || generation !== this.scanGeneration) return;
       this.scanResults = results;
       this.restoredFromMemory = false;
+      this.scannerCategoryFilter = "all";
       this.insertedSuggestionIndices.clear();
       this.clearSearchLink();
       this.lastActiveScannerIndex = null;
@@ -3451,6 +4049,7 @@ class MedicalImageFinderView extends ItemView {
         targetHeading: suggestion?.heading,
         targetConcept: suggestion?.visualConcept,
         targetQuery: suggestion?.recommendedQuery,
+        targetScope: this.scanResults?.scope || null,
         searchOriginSuggestionIndex: index
       })));
     } catch (err) {
@@ -3496,6 +4095,7 @@ class MedicalImageFinderView extends ItemView {
     const targetHeading = this.searchTargetHeading;
     const targetConcept = this.searchTargetConcept;
     const targetQuery = this.searchTargetQuery;
+    const targetScope = this.searchTargetScope;
     const originIdx = this.searchOriginSuggestionIndex;
     this.currentQuery = query;
     this.isSearching = true;
@@ -3523,6 +4123,7 @@ class MedicalImageFinderView extends ItemView {
         targetHeading,
         targetConcept,
         targetQuery,
+        targetScope,
         searchOriginSuggestionIndex: originIdx
       }));
       this.isSearching = false;
@@ -3829,44 +4430,44 @@ class MedicalImageFinderView extends ItemView {
 
     const list = root.createDiv({ cls: "mif-results-list" });
 
-    this.results.forEach((item) => {
+    this.results.forEach((item, idx) => {
       const card = list.createDiv({ cls: "mif-card" });
 
       // Thumbnail
       const thumbContainer = card.createDiv({
         cls: "mif-thumb-container"
       });
-      thumbContainer.title = `${item.title}\nClick to preview • Double-click to open website in browser`;
+      thumbContainer.title = `${item.title}\nClick or double-click for large preview`;
       const img = thumbContainer.createEl("img", {
         cls: "mif-thumb",
         attr: {
-          src: item.thumbnailUrl || item.imageUrl,
+          src: item.imageUrl || item.thumbnailUrl,
           alt: item.title,
           loading: "lazy",
           decoding: "async"
         }
       });
-      bindImageFallback(img, item.imageUrl);
 
-      // Overlay dimension tag
-      if (item.width && item.height) {
-        thumbContainer.createDiv({
-          text: `${item.width}×${item.height}`,
-          cls: "mif-thumb-overlay"
-        });
-      }
+      // Overlay dimension tag (pre-populated if known, revealed/updated when full-res image loads)
+      const overlay = thumbContainer.createDiv({
+        text: (item.width && item.height) ? `${item.width}×${item.height}` : "",
+        cls: "mif-thumb-overlay"
+      });
+      bindHighResPreview(img, overlay, item);
 
-      thumbContainer.onclick = () => {
-        new ImagePreviewModal(this.app, this.plugin, item, this).open();
+      const openBigPreview = () => {
+        new ImagePreviewModal(this.app, this.plugin, item, this, {
+          items: this.results,
+          currentIndex: idx
+        }).open();
       };
+
+      thumbContainer.onclick = openBigPreview;
 
       thumbContainer.ondblclick = (e) => {
         e.preventDefault();
         e.stopPropagation();
-        const targetUrl = item.sourceUrl || item.imageUrl;
-        if (openExternalUrl(targetUrl)) {
-          new Notice(`🌐 Opening source in browser: ${item.domain || "Web"}`);
-        }
+        openBigPreview();
       };
 
       // Card Body
@@ -3933,11 +4534,11 @@ class MedicalImageFinderView extends ItemView {
       const subActions = body.createDiv({ cls: "mif-sub-actions" });
 
       const previewLink = subActions.createEl("button", {
-        text: "🔍 Preview full size",
+        text: "🔍 Large preview",
         cls: "mif-link-btn"
       });
       previewLink.onclick = () => {
-        new ImagePreviewModal(this.app, this.plugin, item, this).open();
+        openBigPreview();
       };
 
       if (item.sourceUrl) {
@@ -3945,7 +4546,8 @@ class MedicalImageFinderView extends ItemView {
           text: "🌐 Source ↗",
           cls: "mif-link-btn"
         });
-        sourceLink.onclick = () => {
+        sourceLink.onclick = (e) => {
+          e?.stopPropagation?.();
           if (openExternalUrl(item.sourceUrl)) {
             new Notice(`🌐 Opening source in browser: ${item.domain || "Web"}`);
           }
@@ -3987,17 +4589,145 @@ class MedicalImageFinderView extends ItemView {
       }
     };
 
-    const activeFile = this.plugin.getTargetView()?.file;
+    const targetView = this.plugin.getTargetView();
+    const activeFile = targetView?.file;
+    const noteContent = targetView?.editor ? targetView.editor.getValue() : "";
+    const totalLines = noteContent ? noteContent.split(/\r?\n/).length : 1;
+    const sections = extractNoteSections(noteContent);
+
+    const liveSel = this.detectEditorSelectionScope(targetView);
+    if (liveSel) {
+      this.editorSelectionScope = liveSel;
+      if (liveSel.isSignificant && this._lastAutoSelectionKey !== liveSel.key) {
+        this._lastAutoSelectionKey = liveSel.key;
+        this.scopeMode = "selection";
+      }
+    } else if (this.scopeMode === "selection" && !this.editorSelectionScope) {
+      this.scopeMode = "full";
+    }
+
+    if (this.scopeMode === "section") {
+      const stillValid = sections.some(s => `${s.startLine}:${s.endLine}` === this.selectedSectionKey);
+      if (!stillValid) {
+        this.scopeMode = "full";
+        this.selectedSectionKey = "";
+      }
+    }
+
+    // Scan Scope Selector Row (Full Note / Selection / Heading Section / Custom Lines)
+    const scopeRow = hero.createDiv({ cls: "mif-scan-scope-row" });
+    scopeRow.createSpan({ text: "🎯 Scan Scope:", cls: "mif-scan-count-label" });
+    const scopeSelect = scopeRow.createEl("select", { cls: "mif-scan-count-select mif-scan-scope-select" });
+
+    const fullOpt = scopeSelect.createEl("option", {
+      text: `📄 Full Note (L1–L${totalLines})`,
+      value: "full"
+    });
+    if (this.scopeMode === "full") fullOpt.selected = true;
+
+    if (this.editorSelectionScope) {
+      const selOpt = scopeSelect.createEl("option", {
+        text: `✂️ ${this.editorSelectionScope.label}`,
+        value: "selection"
+      });
+      if (this.scopeMode === "selection") selOpt.selected = true;
+    }
+
+    for (const sec of sections) {
+      const key = `${sec.startLine}:${sec.endLine}`;
+      const val = `section:${key}`;
+      const prefix = "· ".repeat(Math.max(0, sec.level - 1));
+      const secTitle = sec.heading.length > 34 ? `${sec.heading.slice(0, 31)}...` : sec.heading;
+      const opt = scopeSelect.createEl("option", {
+        text: `${prefix}${secTitle} (L${sec.startLine}–L${sec.endLine})`,
+        value: val
+      });
+      if (this.scopeMode === "section" && this.selectedSectionKey === key) {
+        opt.selected = true;
+      }
+    }
+
+    const customOpt = scopeSelect.createEl("option", {
+      text: "📐 Custom Line Range...",
+      value: "custom"
+    });
+    if (this.scopeMode === "custom") customOpt.selected = true;
+
+    if (this.scopeMode === "selection" && this.editorSelectionScope) {
+      scopeSelect.value = "selection";
+    } else if (this.scopeMode === "section" && this.selectedSectionKey) {
+      scopeSelect.value = `section:${this.selectedSectionKey}`;
+    } else if (this.scopeMode === "custom") {
+      scopeSelect.value = "custom";
+    } else {
+      scopeSelect.value = "full";
+    }
+
+    scopeSelect.onchange = () => {
+      const v = scopeSelect.value || "full";
+      if (v === "selection") {
+        this.scopeMode = "selection";
+      } else if (v.startsWith("section:")) {
+        this.scopeMode = "section";
+        this.selectedSectionKey = v.slice("section:".length);
+      } else if (v === "custom") {
+        this.scopeMode = "custom";
+        this.customScopeStart = Math.max(1, Math.min(this.customScopeStart || 1, totalLines));
+        this.customScopeEnd = Math.max(this.customScopeStart, Math.min(this.customScopeEnd || totalLines, totalLines));
+      } else {
+        this.scopeMode = "full";
+      }
+      this.render();
+    };
+
+    let customStartInput = null;
+    let customEndInput = null;
+    if (this.scopeMode === "custom") {
+      const customRow = hero.createDiv({ cls: "mif-scope-custom-inputs" });
+      customRow.createSpan({ text: "From L" });
+      customStartInput = customRow.createEl("input", {
+        cls: "mif-scope-line-input",
+        attr: { type: "number", min: "1", max: String(totalLines), value: String(this.customScopeStart || 1) }
+      });
+      customRow.createSpan({ text: "To L" });
+      customEndInput = customRow.createEl("input", {
+        cls: "mif-scope-line-input",
+        attr: { type: "number", min: "1", max: String(totalLines), value: String(this.customScopeEnd || totalLines) }
+      });
+    }
+
+    const activeUiScope = this.getSelectedUiScope(targetView);
 
     // 1-Click Clipboard Bridge primary button
     const copyPromptBtn = hero.createEl("button", {
       cls: "mif-scan-btn",
-      text: "📋 Copy Note & Prompt for Alt+G Gemini"
+      text: activeUiScope
+        ? `📋 Copy ${activeUiScope.label} & Prompt for Alt+G`
+        : "📋 Copy Note & Prompt for Alt+G Gemini"
     });
-    copyPromptBtn.title = "Copies 100% full note numbered [L1]..[Ln] with MBBS prompt. Then press Alt+G, paste, and enter in Gemini.";
+    copyPromptBtn.title = activeUiScope
+      ? `Copies ONLY ${activeUiScope.label} with original [L<n>] line numbers so Gemini scans and inserts images strictly inside that section.`
+      : "Copies 100% full note numbered [L1]..[Ln] with MBBS prompt. Then press Alt+G, paste, and enter in Gemini.";
     copyPromptBtn.onclick = () => {
       this.copyNotePromptForAltG();
     };
+
+    if (customStartInput && customEndInput) {
+      const updateCustomRange = () => {
+        const sVal = parseInt(customStartInput.value, 10);
+        const eVal = parseInt(customEndInput.value, 10);
+        if (!isNaN(sVal)) this.customScopeStart = Math.max(1, Math.min(sVal, totalLines));
+        if (!isNaN(eVal)) this.customScopeEnd = Math.max(this.customScopeStart, Math.min(eVal, totalLines));
+        const updatedScope = this.getSelectedUiScope(targetView);
+        copyPromptBtn.setText(
+          updatedScope
+            ? `📋 Copy ${updatedScope.label} & Prompt for Alt+G`
+            : "📋 Copy Note & Prompt for Alt+G Gemini"
+        );
+      };
+      customStartInput.addEventListener("input", updateCustomRange);
+      customEndInput.addEventListener("input", updateCustomRange);
+    }
 
     // Bridge action row
     const bridgeActionRow = hero.createDiv({ cls: "mif-scan-actions" });
@@ -4125,6 +4855,24 @@ class MedicalImageFinderView extends ItemView {
       text: `${this.scanResults.summary} (${this.scanResults.suggestions.length} high-yield visual opportunities)`
     });
 
+    if (this.scanResults.scope) {
+      const scopeBadgeRow = summaryBox.createDiv({ cls: "mif-scope-badge-row" });
+      scopeBadgeRow.createSpan({
+        cls: "mif-scope-pill",
+        text: `📌 Scoped: ${this.scanResults.scope.label}`
+      });
+      const resetScopeBtn = scopeBadgeRow.createEl("button", {
+        cls: "mif-link-btn",
+        text: "Reset to Full Note"
+      });
+      resetScopeBtn.onclick = () => {
+        this.scopeMode = "full";
+        this.editorSelectionScope = null;
+        this.selectedSectionKey = "";
+        this.clearScanMemory();
+      };
+    }
+
     if (this.restoredFromMemory && this.plugin.settings.lastScannedNote) {
       const mismatch = activeFile && activeFile.basename !== this.plugin.settings.lastScannedNote;
       const memTag = summaryBox.createDiv({
@@ -4169,8 +4917,54 @@ class MedicalImageFinderView extends ItemView {
       this.runAutoPilotBatch();
     };
 
-    // Suggestions list
+    // Category filter pills
+    const filterBar = container.createDiv({ cls: "mif-scan-filter-bar" });
+    const allSuggestions = this.scanResults.suggestions || [];
+    const pendingCount = allSuggestions.filter((_, i) => !this.insertedSuggestionIndices.has(i)).length;
+    const categoryCounts = new Map();
+    for (const item of allSuggestions) {
+      const cat = item.visualType || "diagram";
+      categoryCounts.set(cat, (categoryCounts.get(cat) || 0) + 1);
+    }
+
+    const filterPills = [
+      { id: "all", label: `All (${allSuggestions.length})` },
+      { id: "pending", label: `Pending (${pendingCount})` }
+    ];
+    for (const f of MEDICAL_VISUAL_FILTERS) {
+      if (f.id === "all") continue;
+      const cnt = categoryCounts.get(f.id) || 0;
+      if (cnt > 0 || this.scannerCategoryFilter === f.id) {
+        filterPills.push({ id: f.id, label: `${f.label} (${cnt})` });
+      }
+    }
+
+    for (const pill of filterPills) {
+      const chip = filterBar.createEl("button", {
+        cls: `mif-filter-pill ${this.scannerCategoryFilter === pill.id ? "is-active" : ""}`,
+        text: pill.label
+      });
+      chip.type = "button";
+      chip.onclick = () => {
+        this.scannerCategoryFilter = pill.id;
+        this.render();
+      };
+    }
+
+    // Suggestions list (preserve original indices so card IDs and inserted flags never drift)
+    let renderedCardCount = 0;
     this.scanResults.suggestions.forEach((s, idx) => {
+      if (this.scannerCategoryFilter === "pending" && this.insertedSuggestionIndices.has(idx)) {
+        return;
+      }
+      if (
+        this.scannerCategoryFilter !== "all" &&
+        this.scannerCategoryFilter !== "pending" &&
+        (s.visualType || "diagram") !== this.scannerCategoryFilter
+      ) {
+        return;
+      }
+      renderedCardCount++;
       const card = container.createDiv({
         cls: `mif-scan-card ${this.insertedSuggestionIndices.has(idx) ? 'is-inserted' : ''}`
       });
@@ -4249,6 +5043,7 @@ class MedicalImageFinderView extends ItemView {
         this.searchTargetHeading = s.heading;
         this.searchTargetConcept = s.visualConcept;
         this.searchTargetQuery = s.recommendedQuery;
+        this.searchTargetScope = this.scanResults?.scope || null;
         this.searchOriginSuggestionIndex = idx;
         this.lastActiveScannerIndex = idx;
         this.switchToSearchTab(
@@ -4272,31 +5067,39 @@ class MedicalImageFinderView extends ItemView {
           const inlineContainer = card.createDiv({
             cls: "mif-inline-results"
           });
-          inlineList.forEach((item) => {
+          inlineList.forEach((item, tileIdx) => {
             const tile = inlineContainer.createDiv({
               cls: "mif-inline-thumb-card"
             });
-            tile.title = `${item.title}\nClick to preview • Double-click to open website in browser`;
+            tile.title = `${item.title}\nClick or double-click for large preview`;
             const inlineImg = tile.createEl("img", {
               cls: "mif-inline-thumb-img",
               attr: {
-                src: item.thumbnailUrl || item.imageUrl,
+                src: item.imageUrl || item.thumbnailUrl,
                 alt: item.title,
                 loading: "lazy",
                 decoding: "async"
               }
             });
-            bindImageFallback(inlineImg, item.imageUrl);
-            tile.onclick = () => {
-              new ImagePreviewModal(this.app, this.plugin, item, this).open();
+
+            const inlineOverlay = tile.createDiv({
+              cls: "mif-thumb-overlay",
+              text: (item.width && item.height) ? `${item.width}×${item.height}` : ""
+            });
+            bindHighResPreview(inlineImg, inlineOverlay, item);
+
+            const openInlinePreview = () => {
+              new ImagePreviewModal(this.app, this.plugin, item, this, {
+                items: inlineList,
+                currentIndex: tileIdx
+              }).open();
             };
+
+            tile.onclick = openInlinePreview;
             tile.ondblclick = (e) => {
               e.preventDefault();
               e.stopPropagation();
-              const targetUrl = item.sourceUrl || item.imageUrl;
-              if (openExternalUrl(targetUrl)) {
-                new Notice(`🌐 Opening source in browser: ${item.domain || "Web"}`);
-              }
+              openInlinePreview();
             };
 
             const tileActions = tile.createDiv({
@@ -4340,6 +5143,20 @@ class MedicalImageFinderView extends ItemView {
                 iBtn.disabled = false;
               }
             };
+
+            if (item.sourceUrl) {
+              const wBtn = tileActions.createEl("button", {
+                text: "🌐",
+                cls: "mif-link-btn mif-inline-web-btn"
+              });
+              wBtn.title = `Open source page (${item.domain || "Web"})`;
+              wBtn.onclick = (e) => {
+                e.stopPropagation();
+                if (openExternalUrl(item.sourceUrl)) {
+                  new Notice(`🌐 Opening source in browser: ${item.domain || "Web"}`);
+                }
+              };
+            }
           });
         } else {
           const noRes = card.createDiv({ cls: "mif-status" });
@@ -4347,6 +5164,19 @@ class MedicalImageFinderView extends ItemView {
         }
       }
     });
+
+    if (renderedCardCount === 0 && allSuggestions.length > 0) {
+      const emptyFilterBox = container.createDiv({ cls: "mif-status" });
+      emptyFilterBox.setText("No cards match the active filter. ");
+      const showAllBtn = emptyFilterBox.createEl("button", {
+        cls: "mif-link-btn",
+        text: "Show All"
+      });
+      showAllBtn.onclick = () => {
+        this.scannerCategoryFilter = "all";
+        this.render();
+      };
+    }
 
     // Auto-scroll once when explicitly returning to a scanner card or after inline insertion
     const scrollTargetIdx = this.pendingScannerScrollIdx;
@@ -4447,6 +5277,22 @@ class MedicalImageFinderSettingTab extends PluginSettingTab {
               this.plugin.settings.defaultImageWidth = num;
               await this.plugin.saveSettings();
             }
+          });
+      });
+
+    new Setting(containerEl)
+      .setName("Default Fast Batch Preview Size")
+      .setDesc("Default thumbnail height in the Fast Batch Review window.")
+      .addDropdown((drop) => {
+        drop
+          .addOption("sm", "Small (100px)")
+          .addOption("md", "Medium (160px)")
+          .addOption("lg", "Large (230px)")
+          .addOption("xl", "Extra Large (310px)")
+          .setValue(this.plugin.settings.batchPreviewSize || "lg")
+          .onChange(async (val) => {
+            this.plugin.settings.batchPreviewSize = val;
+            await this.plugin.saveSettings({ clearCache: false });
           });
       });
 
@@ -4858,6 +5704,15 @@ class MedicalImageFinderPlugin extends Plugin {
       }
     });
 
+    // Command: Copy selected part & AI prompt for Alt+G Gemini
+    this.addCommand({
+      id: "scan-selection-visuals",
+      name: "Copy selected part & AI prompt for Alt+G Gemini",
+      editorCallback: (editor, view) => {
+        this.triggerScopedAltGFromEditor(editor, view);
+      }
+    });
+
     // Sidebar command: Open search sidebar
     this.addCommand({
       id: "open-sidebar",
@@ -4880,6 +5735,14 @@ class MedicalImageFinderPlugin extends Plugin {
               .setIcon("image")
               .onClick(() => {
                 this.triggerSearchFromEditor(editor, view);
+              });
+          });
+          menu.addItem((item) => {
+            item
+              .setTitle("📋 Scan selected part with AI (Alt+G)")
+              .setIcon("sparkles")
+              .onClick(() => {
+                this.triggerScopedAltGFromEditor(editor, view);
               });
           });
         }
@@ -5007,10 +5870,52 @@ class MedicalImageFinderPlugin extends Plugin {
   }
 
   async triggerScanFromCommand() {
+    const targetView = this.getTargetView();
     const leafView = await this.activateView();
     if (leafView && typeof leafView.switchToScanTab === "function") {
+      if (targetView && typeof leafView.detectEditorSelectionScope === "function") {
+        const selScope = leafView.detectEditorSelectionScope(targetView);
+        if (selScope?.isSignificant) {
+          leafView.editorSelectionScope = selScope;
+          leafView._lastAutoSelectionKey = selScope.key;
+          leafView.scopeMode = "selection";
+        }
+      }
       leafView.switchToScanTab(true);
     }
+  }
+
+  async triggerScopedAltGFromEditor(editor, view) {
+    this.lastMarkdownView = view;
+    const leafView = await this.activateView();
+    if (!leafView) return;
+    let scope = leafView.detectEditorSelectionScope(view);
+    if (!scope && editor && typeof editor.getCursor === "function") {
+      const content = editor.getValue();
+      const totalLines = content ? content.split(/\r?\n/).length : 0;
+      const cursorLine = (editor.getCursor("to")?.line || 0) + 1;
+      const sections = extractNoteSections(content);
+      let enclosing = null;
+      for (const sec of sections) {
+        if (cursorLine >= sec.startLine && cursorLine <= sec.endLine) enclosing = sec;
+      }
+      if (enclosing) {
+        scope = normalizeScanScope({
+          mode: "section",
+          startLine: enclosing.startLine,
+          endLine: enclosing.endLine,
+          label: `Section: ${enclosing.heading} (L${enclosing.startLine}–L${enclosing.endLine})`
+        }, totalLines);
+        leafView.scopeMode = "section";
+        leafView.selectedSectionKey = `${enclosing.startLine}:${enclosing.endLine}`;
+      }
+    } else if (scope) {
+      leafView.editorSelectionScope = scope;
+      leafView._lastAutoSelectionKey = scope.key;
+      leafView.scopeMode = "selection";
+    }
+    leafView.switchToScanTab(false);
+    await leafView.copyNotePromptForAltG(scope);
   }
 
 
@@ -5055,15 +5960,116 @@ class MedicalImageFinderPlugin extends Plugin {
     return cleaned;
   }
 
-  findTopicInsertionPosition(editor, line = null, heading = null, concept = null, query = null) {
+  _findPointEndInRange(editor, rangeStartIdx, rangeEndExclusive, line, concept, query, defaultIdx = null) {
+    const kw = MedicalImageFinderPlugin.extractConceptKeywords(concept, query);
+    let bestMatchIdx = null;
+    let bestMatchScore = 0;
+
+    if (kw.length > 0) {
+      for (let cIdx = rangeStartIdx; cIdx < rangeEndExclusive; cIdx++) {
+        const cLower = editor.getLine(cIdx).toLowerCase();
+        let score = 0;
+        for (const w of kw) {
+          const regex = new RegExp(`\\b${w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i');
+          if (regex.test(cLower)) {
+            score += 3;
+          } else if (w.length >= 4 && cLower.includes(w)) {
+            score += 1;
+          }
+        }
+        if (score > 0 && line != null) {
+          const dist = Math.abs(cIdx - (line - 1));
+          if (dist === 0) score += 4;
+          else if (dist <= 2) score += 2;
+          else if (dist <= 5) score += 1;
+        }
+        if (
+          score > bestMatchScore ||
+          (score === bestMatchScore && bestMatchIdx !== null && line != null &&
+            Math.abs(cIdx - (line - 1)) < Math.abs(bestMatchIdx - (line - 1)))
+        ) {
+          bestMatchScore = score;
+          bestMatchIdx = cIdx;
+        }
+      }
+    }
+
+    let targetPointIdx = null;
+    if (bestMatchIdx !== null && bestMatchScore >= 2) {
+      targetPointIdx = bestMatchIdx;
+    } else if (line != null && (line - 1) >= rangeStartIdx && (line - 1) < rangeEndExclusive) {
+      targetPointIdx = line - 1;
+    }
+
+    if (targetPointIdx !== null) {
+      // Expand to end of bullet block (including child sub-bullets) within range
+      const pText = editor.getLine(targetPointIdx);
+      const bulletMatch = pText.match(/^(\s*)([-*+]|\d+[.)])\s+/);
+      if (bulletMatch) {
+        const parentIndent = bulletMatch[1].length;
+        let currEnd = targetPointIdx;
+        for (let scan = targetPointIdx + 1; scan < rangeEndExclusive; scan++) {
+          const sLine = editor.getLine(scan);
+          const sTrim = sLine.trim();
+          if (!sTrim) {
+            let nextChild = false;
+            for (let la = scan + 1; la < rangeEndExclusive; la++) {
+              const laLine = editor.getLine(la);
+              if (laLine.trim()) {
+                const laBm = laLine.match(/^(\s*)([-*+]|\d+[.)])\s+/);
+                if (laBm && laBm[1].length > parentIndent) nextChild = true;
+                break;
+              }
+            }
+            if (nextChild) continue;
+            break;
+          }
+          const sBm = sLine.match(/^(\s*)([-*+]|\d+[.)])\s+/);
+          if (sBm) {
+            if (sBm[1].length > parentIndent) {
+              currEnd = scan;
+              continue;
+            }
+            break;
+          }
+          currEnd = scan;
+        }
+        return { line: currEnd, ch: editor.getLine(currEnd).length };
+      }
+
+      // Paragraph: scan to end of paragraph within range
+      let currEnd = targetPointIdx;
+      for (let scan = targetPointIdx + 1; scan < rangeEndExclusive; scan++) {
+        const sTrim = editor.getLine(scan).trim();
+        if (!sTrim || /^[-*+]\s+/.test(sTrim) || sTrim.startsWith('#') || /^\d+[.)]\s+/.test(sTrim)) {
+          break;
+        }
+        currEnd = scan;
+      }
+      return { line: currEnd, ch: editor.getLine(currEnd).length };
+    }
+
+    if (defaultIdx !== null) {
+      return { line: defaultIdx, ch: editor.getLine(defaultIdx).length };
+    }
+    return null;
+  }
+
+  findTopicInsertionPosition(editor, line = null, heading = null, concept = null, query = null, scope = null) {
     const lineCount = editor.lineCount();
     if (lineCount === 0) return { line: 0, ch: 0 };
 
+    const normScope = normalizeScanScope(scope, lineCount);
+    const minLineIdx = normScope ? Math.max(0, normScope.startLine - 1) : 0;
+    const maxLineIdx = normScope ? Math.min(lineCount - 1, normScope.endLine - 1) : (lineCount - 1);
+    const scopeEndExclusive = maxLineIdx + 1;
+
     let startLineIdx;
     if (line != null && line > 0) {
-      startLineIdx = Math.max(0, Math.min(line - 1, lineCount - 1));
+      startLineIdx = Math.max(minLineIdx, Math.min(line - 1, maxLineIdx));
     } else {
-      startLineIdx = editor.getCursor('to').line;
+      const cursorLine = editor.getCursor('to').line;
+      startLineIdx = Math.max(minLineIdx, Math.min(cursorLine, maxLineIdx));
     }
 
     let headingIdx = null;
@@ -5083,7 +6089,7 @@ class MedicalImageFinderPlugin extends Plugin {
           let substringMatch = null;
           for (const offset of offsets) {
             const cand = startLineIdx + offset;
-            if (cand >= 0 && cand < lineCount) {
+            if (cand >= minLineIdx && cand < scopeEndExclusive) {
               const candText = editor.getLine(cand);
               const m = candText.match(/^(#{1,6})\s+(.*)/);
               if (m) {
@@ -5108,7 +6114,7 @@ class MedicalImageFinderPlugin extends Plugin {
       }
 
       if (headingIdx === null) {
-        for (let up = startLineIdx; up >= 0; up--) {
+        for (let up = startLineIdx; up >= minLineIdx; up--) {
           const upText = editor.getLine(up);
           const m = upText.match(/^(#{1,6})\s+(.*)/);
           if (m) {
@@ -5122,9 +6128,9 @@ class MedicalImageFinderPlugin extends Plugin {
 
     if (headingIdx !== null) {
       const sectionStartIdx = headingIdx + 1;
-      let sectionEndIdx = lineCount;
+      let sectionEndIdx = scopeEndExclusive;
 
-      for (let curr = sectionStartIdx; curr < lineCount; curr++) {
+      for (let curr = sectionStartIdx; curr < scopeEndExclusive; curr++) {
         const lineText = editor.getLine(curr);
         const trimmed = lineText.trim();
         const nextHeading = lineText.match(/^(#{1,6})\s+/);
@@ -5138,113 +6144,36 @@ class MedicalImageFinderPlugin extends Plugin {
         }
       }
 
-      // Keyword matching within the section to find specific point/bullet
-      const kw = MedicalImageFinderPlugin.extractConceptKeywords(concept, query);
-      let bestMatchIdx = null;
-      let bestMatchScore = 0;
-
-      if (kw.length > 0) {
-        for (let cIdx = sectionStartIdx; cIdx < sectionEndIdx; cIdx++) {
-          const cLower = editor.getLine(cIdx).toLowerCase();
-          let score = 0;
-          for (const w of kw) {
-            const regex = new RegExp(`\\b${w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i');
-            if (regex.test(cLower)) {
-              score += 3;
-            } else if (w.length >= 4 && cLower.includes(w)) {
-              score += 1;
-            }
-          }
-          if (score > 0 && line != null) {
-            const dist = Math.abs(cIdx - (line - 1));
-            if (dist === 0) score += 4;
-            else if (dist <= 2) score += 2;
-            else if (dist <= 5) score += 1;
-          }
-          if (score > bestMatchScore || (score === bestMatchScore && bestMatchIdx !== null && line != null && Math.abs(cIdx - (line - 1)) < Math.abs(bestMatchIdx - (line - 1)))) {
-            bestMatchScore = score;
-            bestMatchIdx = cIdx;
-          }
-        }
-      }
-
-      let targetPointIdx = null;
-      if (bestMatchIdx !== null && bestMatchScore >= 2) {
-        targetPointIdx = bestMatchIdx;
-      } else if (line != null && (line - 1) >= sectionStartIdx && (line - 1) < sectionEndIdx) {
-        targetPointIdx = line - 1;
-      }
-
-      if (targetPointIdx !== null) {
-        // Expand to end of bullet block (including child sub-bullets)
-        const pText = editor.getLine(targetPointIdx);
-        const bulletMatch = pText.match(/^(\s*)([-*+]|\d+[.)])\s+/);
-        if (bulletMatch) {
-          const parentIndent = bulletMatch[1].length;
-          let currEnd = targetPointIdx;
-          for (let scan = targetPointIdx + 1; scan < sectionEndIdx; scan++) {
-            const sLine = editor.getLine(scan);
-            const sTrim = sLine.trim();
-            if (!sTrim) {
-              // Look ahead to check if next non-empty line is still a child bullet
-              let nextChild = false;
-              for (let la = scan + 1; la < sectionEndIdx; la++) {
-                const laLine = editor.getLine(la);
-                if (laLine.trim()) {
-                  const laBm = laLine.match(/^(\s*)([-*+]|\d+[.)])\s+/);
-                  if (laBm && laBm[1].length > parentIndent) nextChild = true;
-                  break;
-                }
-              }
-              if (nextChild) continue;
-              break;
-            }
-            const sBm = sLine.match(/^(\s*)([-*+]|\d+[.)])\s+/);
-            if (sBm) {
-              const childIndent = sBm[1].length;
-              if (childIndent > parentIndent) {
-                currEnd = scan;
-                continue;
-              } else {
-                break; // Hit a sibling or parent bullet
-              }
-            } else {
-              // Continuation line of the bullet
-              currEnd = scan;
-            }
-          }
-          return {
-            line: currEnd,
-            ch: editor.getLine(currEnd).length
-          };
-        }
-
-        // Paragraph: scan to end of paragraph
-        let currEnd = targetPointIdx;
-        for (let scan = targetPointIdx + 1; scan < sectionEndIdx; scan++) {
-          const sTrim = editor.getLine(scan).trim();
-          if (!sTrim || /^[-*+]\s+/.test(sTrim) || sTrim.startsWith('#') || /^\d+[.)]\s+/.test(sTrim)) {
-            break;
-          }
-          currEnd = scan;
-        }
-        return {
-          line: currEnd,
-          ch: editor.getLine(currEnd).length
-        };
-      }
-
-      // Fallback: place below last content of the section
       let lastContentIdx = headingIdx;
       for (let curr = sectionStartIdx; curr < sectionEndIdx; curr++) {
         if (editor.getLine(curr).trim().length > 0) {
           lastContentIdx = curr;
         }
       }
-      return {
-        line: lastContentIdx,
-        ch: editor.getLine(lastContentIdx).length
-      };
+
+      const clampedLine = line != null ? Math.max(minLineIdx, Math.min(line - 1, maxLineIdx)) + 1 : null;
+      return this._findPointEndInRange(
+        editor,
+        sectionStartIdx,
+        sectionEndIdx,
+        clampedLine,
+        concept,
+        query,
+        lastContentIdx
+      );
+    }
+
+    if (normScope) {
+      const clampedLine = Math.max(minLineIdx, Math.min(startLineIdx, maxLineIdx)) + 1;
+      return this._findPointEndInRange(
+        editor,
+        minLineIdx,
+        scopeEndExclusive,
+        clampedLine,
+        concept,
+        query,
+        startLineIdx
+      );
     }
 
     if (line != null) {
@@ -5262,12 +6191,12 @@ class MedicalImageFinderPlugin extends Plugin {
     };
   }
 
-  captureTarget(context = null, line = null, heading = null, concept = null, query = null) {
+  captureTarget(context = null, line = null, heading = null, concept = null, query = null, scope = null) {
     const view = context?.view || this.getTargetView();
     if (!view?.file || !view.editor || view.file.extension !== 'md') throw new Error('Open a Markdown note in the editor first.');
     if (context) this.validateTarget(context);
     const editor = view.editor;
-    const position = this.findTopicInsertionPosition(editor, line, heading, concept, query);
+    const position = this.findTopicInsertionPosition(editor, line, heading, concept, query, scope);
     return {
       view,
       editor,
@@ -5452,7 +6381,8 @@ class MedicalImageFinderPlugin extends Plugin {
       item.targetLine,
       item.targetHeading,
       item.targetConcept || item.visualConcept,
-      item.targetQuery || item.recommendedQuery
+      item.targetQuery || item.recommendedQuery,
+      item.targetScope || null
     );
     if (item.targetLine != null) target.position.ch = target.editor.getLine(target.position.line).length;
     const folderPath = attachmentPath(this.settings.attachmentFolder);
@@ -5495,7 +6425,8 @@ class MedicalImageFinderPlugin extends Plugin {
           job.targetLine,
           job.targetHeading,
           job.targetConcept,
-          job.targetQuery
+          job.targetQuery,
+          job.targetScope || job.imageItem?.targetScope || null
         )
       }));
 

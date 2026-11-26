@@ -277,6 +277,12 @@
   backdrop-filter: blur(4px);
 }
 
+.mif-thumb-overlay.is-lowres {
+  background: rgba(217, 119, 6, 0.92);
+  color: #fff;
+  font-weight: 600;
+}
+
 .mif-card-body {
   padding: 10px;
   display: flex;
@@ -392,36 +398,105 @@
 }
 
 /* Modal styles */
+body .modal-container .modal.mif-preview-modal-window {
+  width: min(1150px, 94vw);
+  max-width: 1150px;
+  height: 88vh;
+  max-height: 88vh;
+  display: flex;
+  flex-direction: column;
+  padding: 16px 20px;
+  box-sizing: border-box;
+}
+
+body .modal.mif-preview-modal-window .modal-content.mif-preview-modal {
+  max-width: none;
+  width: 100%;
+  height: 100%;
+  flex: 1 1 auto;
+  min-height: 0;
+  padding: 0;
+  overflow: hidden;
+}
+
 .mif-preview-modal {
   display: flex;
   flex-direction: column;
-  gap: 12px;
-  max-width: 800px;
+  gap: 10px;
+  max-width: 1100px;
+}
+
+.mif-preview-nav-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex: 0 0 auto;
+}
+
+.mif-preview-nav-counter {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-muted);
+}
+
+.mif-preview-nav-btn {
+  font-size: 11px;
+  padding: 3px 10px;
 }
 
 .mif-modal-img-container {
   display: flex;
   align-items: center;
   justify-content: center;
-  max-height: 65vh;
+  flex: 1 1 auto;
+  min-height: 0;
+  max-height: 74vh;
   background: var(--background-secondary);
   border-radius: var(--radius-m);
   overflow: hidden;
   padding: 10px;
+  cursor: zoom-in;
+}
+
+.mif-modal-img-container.is-zoomed {
+  overflow: auto;
+  align-items: flex-start;
+  justify-content: flex-start;
+  cursor: zoom-out;
 }
 
 .mif-modal-img {
   max-width: 100%;
-  max-height: 60vh;
+  max-height: 70vh;
+  width: auto;
+  height: auto;
   object-fit: contain;
   border-radius: var(--radius-s);
+}
+
+.mif-modal-img.is-zoomed {
+  max-width: none;
+  max-height: none;
+  min-width: 155%;
+  width: auto;
+  height: auto;
+}
+
+.mif-badge.mif-badge-lowres {
+  background: rgba(217, 119, 6, 0.2);
+  color: #d97706;
+  border: 1px solid rgba(217, 119, 6, 0.45);
+  font-weight: 600;
 }
 
 .mif-modal-actions {
   display: flex;
   justify-content: flex-end;
   gap: 8px;
-  margin-top: 8px;
+  margin-top: 4px;
+  flex-wrap: wrap;
+  flex: 0 0 auto;
 }
 
 .mif-empty-state {
@@ -597,9 +672,24 @@
 .mif-inline-thumb-actions {
   display: flex;
   justify-content: space-around;
+  align-items: center;
   padding: 2px;
   background: var(--background-secondary);
   font-size: 10px;
+  gap: 2px;
+}
+
+.mif-inline-thumb-card .mif-thumb-overlay {
+  top: 3px;
+  right: 3px;
+  font-size: 9px;
+  padding: 1px 4px;
+}
+
+.mif-inline-web-btn {
+  flex-shrink: 0;
+  padding: 0 4px;
+  text-decoration: none;
 }
 
 
@@ -720,6 +810,77 @@
   cursor: pointer;
 }
 
+/* --- Partial-Note Scan Scope Controls & Filter Bar --- */
+.mif-scan-scope-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin: 0 0 8px 0;
+  padding: 6px 10px;
+  background: var(--background-secondary-alt);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-s);
+}
+
+.mif-scan-scope-select {
+  max-width: 64%;
+  text-overflow: ellipsis;
+}
+
+.mif-scope-custom-inputs {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 8px;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.mif-scope-line-input {
+  width: 68px;
+  font-size: 11px;
+  padding: 3px 6px;
+  border-radius: var(--radius-s);
+  border: 1px solid var(--background-modifier-border);
+  background: var(--background-primary);
+  color: var(--text-normal);
+}
+
+.mif-scope-badge-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 6px;
+  flex-wrap: wrap;
+}
+
+.mif-scope-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  background: rgba(var(--interactive-accent-rgb, 120, 100, 255), 0.14);
+  border: 1px solid var(--interactive-accent);
+  color: var(--text-normal);
+}
+
+.mif-scan-filter-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin-bottom: 10px;
+}
+
+.mif-scan-filter-bar .mif-filter-pill {
+  padding: 2px 8px;
+  font-size: 11px;
+}
+
 /* --- Batch Action Bar in Scanner View --- */
 .mif-batch-bar {
   display: flex;
@@ -767,6 +928,54 @@ body .modal.mif-batch-modal-window .modal-content.mif-batch-modal {
   min-height: 0;
   padding: 0;
   overflow: hidden;
+  --mif-batch-thumb-h: 230px;
+}
+
+.modal-content.mif-batch-modal.is-size-sm {
+  --mif-batch-thumb-h: 100px;
+}
+
+.modal-content.mif-batch-modal.is-size-md {
+  --mif-batch-thumb-h: 160px;
+}
+
+.modal-content.mif-batch-modal.is-size-lg {
+  --mif-batch-thumb-h: 230px;
+}
+
+.modal-content.mif-batch-modal.is-size-xl {
+  --mif-batch-thumb-h: 310px;
+}
+
+.mif-batch-size-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  background: var(--background-primary);
+  padding: 2px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-s);
+}
+
+.mif-batch-size-btn {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 8px;
+  border: none;
+  border-radius: 3px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.mif-batch-size-btn:hover {
+  color: var(--text-normal);
+  background: var(--background-modifier-hover);
+}
+
+.mif-batch-size-btn.is-active {
+  background: var(--interactive-accent);
+  color: var(--text-on-accent, #ffffff);
 }
 
 .mif-batch-top-bar {
@@ -914,9 +1123,14 @@ body .modal.mif-batch-modal-window .modal-content.mif-batch-modal {
 
 .mif-batch-thumb-option {
   position: relative;
-  flex: 0 0 135px;
-  width: 135px;
-  height: 95px;
+  flex: 0 0 auto;
+  width: auto;
+  height: var(--mif-batch-thumb-h, 230px);
+  min-width: 72px;
+  max-width: min(460px, 75vw);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   border: 2px solid var(--background-modifier-border);
   border-radius: var(--radius-s);
   cursor: pointer;
@@ -937,10 +1151,33 @@ body .modal.mif-batch-modal-window .modal-content.mif-batch-modal {
 }
 
 .mif-batch-thumb-img {
-  width: 100%;
   height: 100%;
-  object-fit: cover;
+  width: auto;
+  max-width: 100%;
+  object-fit: contain;
   display: block;
+}
+
+.mif-batch-zoom-btn {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  z-index: 3;
+  padding: 2px 5px;
+  font-size: 11px;
+  line-height: 1.2;
+  border-radius: 4px;
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  background: rgba(0, 0, 0, 0.72);
+  color: #ffffff;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+
+.mif-batch-thumb-option:hover .mif-batch-zoom-btn,
+.mif-batch-zoom-btn:focus {
+  opacity: 1;
 }
 
 .mif-batch-choice-label {

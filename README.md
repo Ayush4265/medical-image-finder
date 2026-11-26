@@ -2,28 +2,31 @@
 
 A dedicated Windows Obsidian plugin that enables medical students and clinicians to search, preview, copy, save, and AI-audit medical reference images directly from their notes.
 
-## Key Features (v2.5)
+## Key Features (v2.6)
 
-- **⚡ Fast Batch Review & Multi-Select**: Review all AI visual opportunities at once in an interactive modal. Features smooth horizontal mouse-wheel scrolling across all returned images (without locking vertical modal scroll) and allows toggling 1 or more images per query for automated bottom-to-top batch insertion with zero line drift.
+- **🎯 Partial-Note AI Scanning & Bounded Insertion**: Scan only a highlighted selection, a specific `# Heading` section, or a custom line range (`From L__ To L__`) using external AI (`Alt+G` / clipboard bridge), API backends, or the Offline Scanner. Preserves original `[L<number>]` prefixes, filters out-of-scope suggestions, and locks insertion strictly within the scanned range. Includes a right-click **📋 Scan selected part with AI (Alt+G)** menu option and Command Palette shortcut.
+- **🖼️ Large In-App Lightbox Preview (No Unwanted Browser Tabs)**: Double-clicking any image in Search results, Scanner Inline Quick Find, or Fast Batch opens a large in-Obsidian preview (`ImagePreviewModal`) with double-click / button **2× Zoom**, keyboard navigation (`←` / `→`), `Z` zoom toggle, and `Space` batch selection toggle. Source webpages open on demand via explicit `🌐 Open source page` / `🌐` buttons.
+- **⚡ Fast Batch Review (`S / M / L / XL`, Aspect-Ratio Fit & Multi-Select)**: Review all AI visual opportunities in a responsive modal with persistent **S / M / L (default) / XL** thumbnail sizes, uncropped aspect-ratio horizontal scrolling, hover `🔍` preview button, accidental double-click toggle protection, fixed `0/N` fetch progress bar, and bottom-to-top batch insertion with zero line drift.
+- **🔍 High-Resolution Bright Data Google Images (`udm=2` + `parsed_light`)**: Automatically requests Light JSON (`parsed_light`) with `udm=2` to fetch up to 100 full-resolution `original_image` URLs and true pixel dimensions (`original_width` × `original_height`), deprioritizes tiny icons/thumbnails, and renders full-resolution previews with live resolution badges (`< 250px` low-res warnings) and safe fallback without false low-res stamps.
+- **🏷️ Scanner Category Filter Pills**: Filter visual suggestions in one click (`All`, `Pending`, `Diagram`, `Radiology`, `HPE`, `Clinical`, `Criteria`, `Embryology`) while keeping original note references intact.
 - **📐 Smart List Continuation & Clean Embeds**: Images inserted under list items or sub-bullets automatically inherit the exact indentation of the bullet point, eliminating syntax corruption and preventing subsequent bullet points from turning into indented code blocks. Intrusive caption text is omitted for clean reading.
-- **🌐 Double-Click to Open Source**: Double-clicking any image in the search grid, fast batch review modal, inline cards, or full-screen preview opens the original source article or website directly in your browser.
-- **🔍 Bright Data Google Images Integration**: Added support for Bright Data SERP API, giving you 5,000 free Google Images queries per month with high-resolution original images and instant preview thumbnails.
 - **✨ Multi-Backend AI Note Visual Scanner**:
   - Automatically identifies sections lacking illustrations and flags high-yield visual gaps (surgical triangles, operative repairs, anatomical layers, pathognomonic radiological signs, histology).
-  - Supports **Google Gemini** (Gemini 2.5 Flash, 2.5 Pro, 3.6 Flash, etc.), **Groq** (Llama 3.1 8B Instant), **OpenRouter**, or an **Offline Heuristic Scanner** requiring zero API keys.
-  - Generates custom AI prompt templates with `[L<number>]` line mapping for external LLM chat interfaces (Alt+G).
+  - Supports **Google Gemini** (Gemini 2.5 Flash, 2.5 Pro, etc.), **Groq** (Llama 3.1 8B Instant), **OpenRouter**, or an **Offline Heuristic Scanner** requiring zero API keys.
+  - Generates custom AI prompt templates with `[L<number>]` line mapping for external LLM chat interfaces (`Alt+G`).
 - **Zero-Setup Search Out-of-the-Box**: Uses DuckDuckGo Image Search by default — no API keys, accounts, or subscriptions needed.
-- **Medical Visual Mode Quick-Filters**: 1-click filter pills in the sidebar header to instantly target:
-  - `[All]`: Raw search terms without modifier.
-  - `[Atlas / Diagram]`: Anatomical illustrations and labeled textbook figures.
-  - `[Radiology]`: Plain radiographs, CT, MRI, and contrast imaging.
-  - `[Histology]`: High-power microscopy, H&E staining, and pathology biopsies.
-  - `[Clinical / Surgical]`: Operative and laparoscopic fields of view.
-- **Multi-Provider Support**: Switch easily between DuckDuckGo, Wikimedia Commons, Bright Data (5,000 free/mo), Google Custom Search (CSE), SerpApi Google Images, and Brave Search.
-- **1-Click Clipboard Copy**: Click **📋 Copy image** directly on any result card to decode and place the high-resolution image directly onto your Windows clipboard. Press `Ctrl + V` anywhere in your note (or external apps like Anki) to paste.
-- **1-Click Offline Vault Save & Insert**: Click **📥 Insert in note** to download the original image into your vault's `Attachments/MedicalImages/` folder with unique content hashing and embed `![[Attachments/MedicalImages/...|500]]` directly beneath the selected sentence or paragraph.
-- **Interactive Sidebar & Full-Size Preview**: Docked right sidebar keeps your note visible side-by-side with high-resolution image cards, dimension tags, domain sources, and a zoomable modal.
-- **Editor Context Menu & Command Palette**: Select text in your note (e.g. `borders of triangle of doom and pain`), right-click and choose **Find images for selection**, or press `Ctrl + P` and run **Find images**.
+- **Medical Visual Mode Quick-Filters**: 1-click filter pills in the sidebar header to instantly target `[All]`, `[Atlas / Diagram]`, `[Radiology]`, `[Histology]`, `[Clinical / Surgical]`, `[Criteria / Scoring]`, and `[Embryology / Physio]`.
+- **Multi-Provider Support**: Switch easily between DuckDuckGo, Bright Data (5,000 free/mo), Wikimedia Commons, Google Custom Search (CSE), SerpApi Google Images, and Brave Search.
+- **1-Click Clipboard Copy & Offline Vault Insert**: Click **📋 Copy image** to copy decoded images to the Windows clipboard, or **📥 Insert in note** to store hashed files inside `Attachments/MedicalImages/` and embed cleanly (`![[Attachments/MedicalImages/...|500]]`).
+- **Editor Context Menu & Command Palette**: Select text in your note, right-click for **Find images for "..."** or **📋 Scan selected part with AI (Alt+G)**, or trigger commands via `Ctrl + P`.
+
+## What's New in v2.6.0
+
+- **Partial-Note Scanning**: Added full UI scope picker (`Full Note`, `Selection`, `# Heading Section`, `Custom L__–L__`), editor right-click scoped `Alt+G` trigger, scope pill badges, and hard insertion boundary clamping.
+- **In-App Big Preview & Keyboard Navigation**: Replaced double-click-to-browser with in-app lightbox zoom (`←`/`→`, `Z`, `Space`, double-click 2× zoom) and moved browser launch to explicit `🌐` buttons.
+- **Fast Batch Overhaul**: Added `S / M / L / XL` thumbnail switcher (default Large `230px`), uncropped `object-fit: contain` aspect-ratio tiles, hover `🔍` zoom, accidental double-click toggle rollback, and fixed the `3/N` progress bar jump bug so progress starts at `0/N`.
+- **Bright Data Full-Resolution Fix**: Upgraded `BrightDataProvider` to `&udm=2` + `data_format: "parsed_light"`, prioritized high-res `original_image` results with `original_width`/`original_height`, upgraded raw HTML tuple fallback, and fixed UI preview/dimension loading so hotlink-protected thumbnails don't stamp false `225px` low-res warnings.
+- **Scanner & UX Polish**: Added Scanner category filter pills (`All`, `Pending`, categories), live natural dimension & `< 250px` low-res badges, and kept `styles.css` 100% free of Obsidian CSS lint warnings.
 
 ## How to Use
 
